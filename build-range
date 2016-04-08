@@ -1,0 +1,73 @@
+
+METHOD build_range.
+
+  DATA: lo_elemdescr TYPE REF TO cl_abap_elemdescr.
+  DATA: lv_structname TYPE string.
+  DATA: lr_rgrow TYPE REF TO data
+        .
+  FIELD-SYMBOLS: <rgtab> TYPE INDEX TABLE,
+                 <rgrow> TYPE any,
+                 <comp> TYPE any.
+* We don't want to build a range with initial components
+  IF ( iv_lo IS INITIAL AND iv_hi IS INITIAL ).
+    RETURN.
+  ENDIF.
+* Find out the data type
+  TRY.
+      lo_elemdescr ?= cl_abap_typedescr=>describe_by_data( iv_lo ).
+    CATCH cx_sy_move_cast_error.
+  ENDTRY.
+  lv_structname = lo_elemdescr->help_id.
+  IF lv_structname IS INITIAL.
+    RETURN.
+  ENDIF.
+  r_rg =       cl_wd_dynamic_tool=>create_range_table(
+             i_typename     = lv_structname
+*            i_length       =
+*            i_decimals     =
+                ).
+  IF r_rg IS INITIAL.
+    RETURN.
+  ENDIF.
+  ASSIGN r_rg->* TO <rgtab>.
+  CREATE DATA lr_rgrow LIKE LINE OF <rgtab>.
+  ASSIGN lr_rgrow->* TO <rgrow>.
+  ASSIGN COMPONENT 'SIGN' OF STRUCTURE <rgrow> TO <comp>.
+  IF sy-subrc = 0.
+    <comp> = 'I'.
+  ENDIF.
+  ASSIGN COMPONENT 'OPTION' OF STRUCTURE <rgrow> TO <comp>.
+  IF sy-subrc = 0.
+    <comp> = /bilot/cl_neptune_util=>get_option( iv_lo = iv_lo iv_hi = iv_hi ).
+  ENDIF.
+  ASSIGN COMPONENT 'LOW' OF STRUCTURE <rgrow> TO <comp>.
+  IF sy-subrc = 0.
+    <comp> = iv_lo.
+  ENDIF.
+  ASSIGN COMPONENT 'HIGH' OF STRUCTURE <rgrow> TO <comp>.
+  IF sy-subrc = 0.
+    <comp> = iv_hi.
+  ENDIF.
+  APPEND <rgrow> TO <rgtab>.
+
+  GET REFERENCE OF <rgtab> INTO r_rg.
+
+ENDMETHOD.
+
+
+METHOD get_option.
+  IF iv_hi IS INITIAL.
+* Only low specified or empty range
+    rv_option = 'EQ'.
+  ELSE.
+    IF iv_lo IS INITIAL.
+* Only high specified = up to high
+      rv_option = 'BT'.
+    ELSE.
+* Both low and high = between
+      rv_option = 'BT'.
+    ENDIF.
+  ENDIF.
+ENDMETHOD.
+
+
