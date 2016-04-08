@@ -670,4 +670,20 @@ METHOD update_review_data.
   ENDIF.
 
 ENDMETHOD.
+* Macros
+*"* use this source file for any macro definitions you need
+*"* in the implementation part of the class
+DEFINE assign_from_comp.
+  assign component &1 of structure &2 to <&3> casting.
+  if sy-subrc = 0.
+    &4 = <&3>.
+  endif.
+END-OF-DEFINITION.
+
+DEFINE assign_to_comp.
+  assign component &1 of structure &2 to <&3> casting.
+  if sy-subrc = 0.
+    <&3> = &4.
+  endif.
+END-OF-DEFINITION.
 ENDCLASS.
