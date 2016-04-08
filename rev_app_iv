@@ -1,0 +1,673 @@
+class zCL_REVAPP_REP_IV definition
+  public
+  inheriting from zCL_REVAPP_REP
+  final
+  create public .
+
+public section.
+
+  types HIS_T type zIV_LOGHIS .
+  types REPDATA_T type zIV_LOG_REPORT .
+  types:
+    HIS_TT type STANDARD TABLE OF his_t with DEFAULT KEY .
+  types:
+    REPDATA_TT type STANDARD TABLE OF repdata_t WITH DEFAULT KEY .
+
+  data MT_HIS type HIS_TT .
+  data MT_REPDATA type REPDATA_TT .
+
+  methods CONSTRUCTOR
+    importing
+      !IT_REPDATA type REPDATA_TT .
+  class zCL_IV_SELECT definition load .
+  class zCL_REVAPP_REP_IV definition load .
+  class-methods GET_REVAPP_FOR_NEPTUNE
+    importing
+      !IRG_REFNO type zCL_IV_SELECT=>zIF_RA_SEL~REFNO_RT
+      !IRG_BUKRS type zCL_IV_SELECT=>zIF_RA_SEL~BUKRS_RT
+      !IRG_BELNR type zCL_IV_SELECT=>BELNR_RT
+      !IRG_BUDAT type zCL_IV_SELECT=>zIF_RA_SEL~POST_DATE_RT
+      !IRG_XBLNR type zCL_IV_SELECT=>XBLNR_RT
+      !IRG_INVDT type zCL_IV_SELECT=>INVDT_RT
+      !IRG_NETDT type zCL_IV_SELECT=>NETDT_RT
+      !IRG_AMOUNT type zCL_IV_SELECT=>zIF_RA_SEL~AMOUNT_RT
+      !IRG_USER type zCL_IV_SELECT=>zIF_RA_SEL~USER_RT
+      !IRG_LIFNR type zCL_IV_SELECT=>LIFNR_RT
+      !IRG_LIFNR2 type zCL_IV_SELECT=>LIFNR_RT
+    returning
+      value(RT_REPDATA) type zCL_REVAPP_REP_IV=>REPDATA_TT .
+  class-methods TEST2
+    importing
+      !IT_REFNO type zCL_IV_SELECT=>zIF_RA_SEL~REFNO_TT .
+  class-methods TEST .
+
+  methods GET_NAMES
+    redefinition .
+protected section.
+
+  methods BUILD_REVAPP_KEY_TAB
+    redefinition .
+  methods COMPRESS_HIS
+    redefinition .
+  methods GET_REVAPP_HIS
+    redefinition .
+  methods PROCESS_LOG_HIS
+    redefinition .
+  methods SORT_MT
+    redefinition .
+  methods PROCESS_LOG_APPR
+    redefinition .
+private section.
+
+  methods CHECK_USER_IN_HIS
+    importing
+      !IO_SEL type ref to zIF_RA_SEL
+    returning
+      value(RT_LOG) type zIV_LOG_TAB .
+  class zCL_IV_SELECT definition load .
+  methods SET_RANGES_FOR_LOG
+    importing
+      !IRG_REFNO type zCL_IV_SELECT=>zIF_RA_SEL~REFNO_RT
+      !IRG_BUKRS type zCL_IV_SELECT=>zIF_RA_SEL~BUKRS_RT
+      !IRG_BELNR type zCL_IV_SELECT=>BELNR_RT
+      !IRG_BUDAT type zCL_IV_SELECT=>zIF_RA_SEL~POST_DATE_RT
+      !IRG_XBLNR type zCL_IV_SELECT=>XBLNR_RT
+      !IRG_INVDT type zCL_IV_SELECT=>INVDT_RT
+      !IRG_NETDT type zCL_IV_SELECT=>NETDT_RT
+      !IRG_AMOUNT type zCL_IV_SELECT=>zIF_RA_SEL~AMOUNT_RT
+      !IRG_USER type zCL_IV_SELECT=>zIF_RA_SEL~USER_RT
+      !IRG_LIFNR type zCL_IV_SELECT=>LIFNR_RT
+      !IRG_LIFNR2 type zCL_IV_SELECT=>LIFNR_RT .
+  methods GET_ITEMS
+    importing
+      !IT_LOG type zIV_LOG_TAB .
+  methods SPLIT_HIS
+    exporting
+      !ET_HIS_MASTER type HIS_TT
+      !ET_HIS_REVIEWER type HIS_TT .
+  methods UPDATE_REVIEW_DATA
+    importing
+      !IV_REFNO type zIV_REFNO
+      !IV_USER type SYUNAME
+    changing
+      !CS_REPROW type REPDATA_T .
+  methods UPDATE_APPROVAL_DATA
+    importing
+      !IV_REFNO type zIV_REFNO
+      !IV_USER type SYUNAME
+    changing
+      !CS_REPROW type REPDATA_T .
+ENDCLASS.
+
+
+
+CLASS zCL_REVAPP_REP_IV IMPLEMENTATION.
+
+
+method BUILD_REVAPP_KEY_TAB.
+  FIELD-SYMBOLS: <reprow> TYPE any,
+                 <comp> type c.
+  DATA:
+      ls_ra_key TYPE revapp_key_t.
+  LOOP AT mt_repdata ASSIGNING <reprow>.
+    assign_from_comp 'REFNO' <reprow> comp ls_ra_key-refno.
+    assign_from_comp 'ITEM' <reprow> comp ls_ra_key-buzei.
+    APPEND ls_ra_key TO rt_ra_key.
+  ENDLOOP.
+endmethod.
+
+
+METHOD check_user_in_his.
+  DATA: lrg_status TYPE zcl_iv_select=>zif_ra_sel~status_rt,
+        ls_refno TYPE revapp_key_t,
+        lt_refno TYPE revapp_key_tt,
+        lr_refno TYPE REF TO data,
+        ls_user TYPE LINE OF zcl_iv_select=>zif_ra_sel~user_rt,
+        lo_sel type ref to zcl_iv_select.
+  DATA: lr_his TYPE REF TO data.
+  FIELD-SYMBOLS: <logrow> TYPE ziv_log,
+                 <histab> TYPE his_tt.
+
+  TRY.
+      lo_sel ?= me->mo_db.
+    CATCH cx_sy_move_cast_error.
+      RETURN.
+  ENDTRY.
+  IF lo_sel->mrg_user IS INITIAL.
+    rt_log = lo_sel->mt_log.
+    RETURN.
+  ENDIF.
+
+*  If a user has been specified, he/she should have a role in history. Do we want to limit to rev/app roles?
+*  lrg_status = get_revapp_status_range( ).
+
+  LOOP AT lo_sel->mt_log ASSIGNING <logrow>.
+    ls_refno-refno = <logrow>-refno.
+    APPEND ls_refno TO lt_refno.
+  ENDLOOP.
+  GET REFERENCE OF lt_refno INTO lr_refno.
+
+  lr_his = lo_sel->zif_ra_sel~get_his( lr_refno ).
+  ASSIGN lr_his->* TO <histab>.
+  ASSERT sy-subrc = 0.
+  CLEAR lt_refno.
+  SORT <histab> BY refno ASCENDING status_user ASCENDING.
+  LOOP AT lo_sel->mt_log ASSIGNING <logrow>.
+    LOOP AT lo_sel->mrg_user INTO ls_user.
+      READ TABLE <histab> WITH KEY refno = <logrow>-refno status_user = ls_user-low
+        TRANSPORTING NO FIELDS BINARY SEARCH.
+      IF sy-subrc = 0.
+        APPEND <logrow> TO rt_log.
+      ENDIF.
+      EXIT.
+    ENDLOOP.
+  ENDLOOP.
+* At this point, lo_sel->mt_log may contain rows that should not be on the report. Use rt_log!
+ENDMETHOD.
+
+
+method COMPRESS_HIS.
+  SORT mt_his BY refno ASCENDING status_user ASCENDING line_no DESCENDING.
+  DELETE ADJACENT DUPLICATES FROM mt_his COMPARING refno status_user. "just leave the last line for each user!
+endmethod.
+
+
+method CONSTRUCTOR.
+  super->constructor( ).
+  mt_repdata = it_repdata.
+  create object mo_db type zcl_iv_select.
+endmethod.
+
+
+METHOD get_items.
+  DATA: prev_bukrs TYPE bukrs,
+        prev_belnr TYPE belnr_d,
+        prev_gjahr TYPE gjahr,
+        lr_log TYPE REF TO data,
+        lr_rep TYPE REF TO data.
+  FIELD-SYMBOLS: <logrow> TYPE ziv_log,
+                 <reprow> TYPE zcl_revapp_rep_iv=>repdata_t.
+*  CHECK mt_repdata IS NOT INITIAL.
+  GET REFERENCE OF it_log INTO lr_log.
+  GET REFERENCE OF mt_repdata INTO lr_rep.
+  me->mo_db->get_items(
+    EXPORTING ir_log = lr_log
+    CHANGING  cr_rep = lr_rep ).
+
+  LOOP AT mt_repdata ASSIGNING <reprow>.
+    IF <reprow>-bukrs <> prev_bukrs OR <reprow>-fi_document <> prev_belnr OR <reprow>-fiscal_year <> prev_gjahr.
+      prev_bukrs = <reprow>-bukrs.
+      prev_belnr = <reprow>-fi_document .
+      prev_gjahr = <reprow>-fiscal_year.
+      READ TABLE it_log ASSIGNING <logrow>
+        WITH KEY bukrs = <reprow>-bukrs fiscal_year = <reprow>-fiscal_year fi_document = <reprow>-fi_document BINARY SEARCH.
+      ASSERT sy-subrc = 0. "should always be, as we selected mt_repdata based on mt_log
+    ENDIF.
+    MOVE-CORRESPONDING <logrow> TO <reprow>.
+  ENDLOOP.
+ENDMETHOD.
+
+
+method GET_NAMES.
+
+  DATA:
+      ls_name TYPE zCL_MEMO_SELECT=>zIF_RA_SEL~name_t,
+      lt_name TYPE zCL_MEMO_SELECT=>zIF_RA_SEL~name_tt
+      .
+  FIELD-SYMBOLS: <reprow> TYPE repdata_t.
+
+  LOOP AT mt_repdata ASSIGNING <reprow>.
+    ls_name-bname = <reprow>-reviewer.
+    APPEND ls_name TO lt_name.
+    CLEAR ls_name.
+    ls_name-bname = <reprow>-approver.
+    APPEND ls_name TO lt_name.
+    CLEAR ls_name.
+  ENDLOOP.
+
+  mo_db->get_names( CHANGING ct_name = lt_name ).
+  sort lt_name by bname ASCENDING.
+
+  LOOP AT mt_repdata ASSIGNING <reprow>.
+    IF <reprow>-reviewer IS NOT INITIAL.
+      READ TABLE lt_name INTO ls_name WITH KEY bname = <reprow>-reviewer BINARY SEARCH.
+      <reprow>-rev_name = ls_name-name_text.
+      CLEAR ls_name.
+    ENDIF.
+    IF <reprow>-approver IS NOT INITIAL.
+      READ TABLE lt_name INTO ls_name WITH KEY bname = <reprow>-approver BINARY SEARCH.
+      <reprow>-app_name = ls_name-name_text.
+      CLEAR ls_name.
+    ENDIF.
+  ENDLOOP.
+endmethod.
+
+
+METHOD get_revapp_for_neptune.
+  DATA: lo_me TYPE REF TO zcl_revapp_rep_iv,
+*        lo_sel TYPE REF TO zcl_iv_select,
+        ls_rep TYPE repdata_t,
+        lt_rep TYPE repdata_tt,
+        lt_log TYPE ziv_log_tab.
+
+  DATA: lr_data TYPE REF TO data,
+        lrg_status TYPE zcl_iv_select=>zif_ra_sel~status_rt.
+  FIELD-SYMBOLS: <rgtab> TYPE INDEX TABLE,
+                 <logrow> TYPE ziv_log.
+
+  CREATE OBJECT lo_me
+    EXPORTING
+      it_repdata = lt_rep.
+
+  lo_me->set_ranges_for_log(
+    EXPORTING
+      irg_refno  = irg_refno
+      irg_bukrs  = irg_bukrs
+      irg_belnr  = irg_belnr "CER-299
+      irg_budat  = irg_budat
+      irg_xblnr  = irg_xblnr
+      irg_invdt  = irg_invdt
+      irg_netdt  = irg_netdt
+      irg_amount = irg_amount
+      irg_user   = irg_user
+      irg_lifnr  = irg_lifnr
+      irg_lifnr2 = irg_lifnr2
+         ).
+
+* 1. Get log entries matching the selection criteria
+  lo_me->mo_db->get_log( ).
+*  lt_log = lo_sel->mt_log.
+* Clear ranges after log selection
+  lo_me->mo_db->clear_ranges( ).
+* Set user for history selections
+  lo_me->mo_db->set_ranges( irg_user = irg_user ).
+  lt_log = lo_me->check_user_in_his( lo_me->mo_db ).
+
+* 2. With log entries, get the items and build report rows me->mt_repdata
+*    Sort lt_log for binary search in get_items().
+  SORT lt_log BY bukrs ASCENDING fiscal_year ASCENDING fi_document ASCENDING .
+  lo_me->get_items( lt_log ).
+
+* 3. Get review and approval data to the report rows
+  DATA: lo_ra TYPE REF TO zcl_revapp_rep_iv.
+  CREATE OBJECT lo_ra
+    EXPORTING
+      it_repdata = lo_me->mt_repdata.
+  lo_ra->get_revapp_data( ).
+  rt_repdata = lo_ra->mt_repdata.
+ENDMETHOD.
+
+
+method GET_REVAPP_HIS.
+  data: lr_his type REF TO data,
+        lr_key type REF TO data.
+  FIELD-SYMBOLS: <his> type his_tt.
+  get REFERENCE OF it_refno INTO lr_key.
+  lr_his = mo_db->get_his( lr_key ).
+  assign lr_his->* to <his>.
+  assert sy-subrc = 0.
+  mt_his = <his>.
+  compress_his( ).
+endmethod.
+
+
+method PROCESS_LOG_APPR.
+*CALL METHOD SUPER->PROCESS_LOG_APPR
+*  EXPORTING
+*    IO_RA  =
+*    .
+
+  data lt_appr type zlog_appr_tab.
+  data ls_appr type zlog_appr.
+  FIELD-SYMBOLS <data> type zIV_LOG_REPORT.
+
+  data lv_refno type ziv_refno.
+
+  lv_refno = io_ra->get_refno( ).
+
+  select * from zlog_appr
+    into table lt_appr
+    where refno = lv_refno.
+
+  loop at mt_repdata ASSIGNING <data> where refno = lv_refno.
+    read table lt_appr into ls_appr with key buzei = <data>-item.
+    if sy-subrc eq 0.
+      if ls_appr-postedby+2 is not initial.
+        <data>-reviewer = ls_appr-postedby+2.
+        <data>-REV_DATE = ls_appr-zrev_date.
+        <data>-REV_time = ls_appr-zrev_time.
+      endif.
+      if ls_appr-zappr_user+2 is not initial.
+        <data>-approver = ls_appr-zappr_user+2.  "Tässä sijainen jos sijainen hyväksyy
+        <data>-app_DATE = ls_appr-zappr_date.
+        <data>-app_time = ls_appr-zappr_time.
+      endif.
+    endif.
+  endloop.
+
+endmethod.
+
+
+METHOD process_log_his.
+* Fill in review and approval data to the report rows
+  DATA:
+        usreviewer TYPE swragent,
+        usapprover TYPE swragent,
+        reviewer TYPE syuname,
+        approver TYPE syuname,
+        lt_his_reviewer TYPE his_tt,
+        lt_his_master TYPE his_tt.
+
+  FIELD-SYMBOLS: <reprow> TYPE repdata_t,
+                 <hisrow> TYPE his_t,
+                 <uname> TYPE xubname,
+                 <date> TYPE sydatum,
+                 <time> TYPE syuzeit.
+
+* IV uses POSTEDBY whereas MEMO uses REVIEWER
+  usreviewer = io_ra->get_postedby( ).
+  usapprover = io_ra->get_approver( ).
+  reviewer = usreviewer-objid.
+  approver = usapprover-objid.
+  READ TABLE mt_repdata
+    ASSIGNING <reprow>
+    WITH KEY refno = io_ra->get_refno( ) item = io_ra->get_buzei( ) BINARY SEARCH.
+  IF sy-subrc = 0.
+    <reprow>-reviewer = reviewer.
+    <reprow>-approver = approver.
+  ENDIF.
+  update_review_data(
+    EXPORTING iv_refno = io_ra->get_refno( ) iv_user = reviewer
+    CHANGING cs_reprow = <reprow> ).
+
+  update_approval_data(
+    EXPORTING iv_refno = io_ra->get_refno( ) iv_user = approver
+    CHANGING cs_reprow = <reprow> ).
+
+ENDMETHOD.
+
+
+method SET_RANGES_FOR_LOG.
+    DATA:
+        lo_sel TYPE REF TO zcl_iv_select.
+
+  DATA: lr_data TYPE REF TO data,
+        lrg_status TYPE zCL_IV_SELECT=>zIF_RA_SEL~status_rt,
+        ls_rg TYPE mo_db->rgref_t,
+        lt_rgtab TYPE mo_db->rgref_tt,
+        lr_rgtab TYPE REF TO data.
+  FIELD-SYMBOLS: <rgtab> TYPE INDEX TABLE.
+    TRY.
+      lo_sel ?= me->mo_db.
+    CATCH cx_sy_move_cast_error.
+      RETURN.
+  ENDTRY.
+* For review and approval data, only consider logs with status POSTED
+  lr_data = zcl_trav_search=>build_range( iv_lo = zcl_revapp_rep_memo=>co_posted ).
+  ASSERT lr_data IS NOT INITIAL.
+  ASSIGN lr_data->* TO <rgtab>.
+  lrg_status = <rgtab>.
+
+
+* Add all additional ranges to the generic range tab
+  IF irg_xblnr IS NOT INITIAL.
+    ls_rg-name = 'XBLNR'.
+    GET REFERENCE OF irg_xblnr INTO ls_rg-rgref.
+    APPEND ls_rg TO lt_rgtab. CLEAR ls_rg.
+  ENDIF.
+  IF irg_invdt IS NOT INITIAL.
+    ls_rg-name = 'INVDT'.
+    GET REFERENCE OF irg_invdt INTO ls_rg-rgref.
+    APPEND ls_rg TO lt_rgtab. CLEAR ls_rg.
+  ENDIF.
+  IF irg_netdt IS NOT INITIAL.
+    ls_rg-name = 'NETDT'.
+    GET REFERENCE OF irg_netdt INTO ls_rg-rgref.
+    APPEND ls_rg TO lt_rgtab. CLEAR ls_rg.
+  ENDIF.
+  IF irg_lifnr IS NOT INITIAL.
+    ls_rg-name = 'LIFNR'.
+    GET REFERENCE OF irg_lifnr INTO ls_rg-rgref.
+    APPEND ls_rg TO lt_rgtab. CLEAR ls_rg.
+  ENDIF.
+  IF irg_lifnr2 IS NOT INITIAL.
+    ls_rg-name = 'LIFNR2'.
+    GET REFERENCE OF irg_lifnr2 INTO ls_rg-rgref.
+    APPEND ls_rg TO lt_rgtab. CLEAR ls_rg.
+  ENDIF.
+* begin INS CER-299 Arto Pihlaja 7.4.2016
+  IF irg_lifnr2 IS NOT INITIAL.
+    ls_rg-name = 'BELNR'.
+    GET REFERENCE OF irg_lifnr2 INTO ls_rg-rgref.
+    APPEND ls_rg TO lt_rgtab. CLEAR ls_rg.
+  ENDIF.
+* end INS CER-299
+  GET REFERENCE OF lt_rgtab INTO lr_rgtab.
+  lo_sel->zif_ra_sel~set_ranges(
+    EXPORTING
+      irg_refno = irg_refno
+      irg_bukrs = irg_bukrs
+      irg_budat = irg_budat
+      irg_bldat = irg_invdt
+      irg_amount = irg_amount
+      irg_status = lrg_status
+*      irg_user  = irg_user "we'll look for the user in HIS, not LOG
+      ir_rgtab = lr_rgtab
+      ).
+
+endmethod.
+
+
+method SORT_MT.
+  SORT mt_repdata BY refno ASCENDING item ASCENDING.
+endmethod.
+
+
+METHOD split_his.
+  FIELD-SYMBOLS: <his> TYPE his_t.
+  LOOP AT mt_his ASSIGNING <his>.
+    CASE <his>-status.
+      WHEN co_toreview.
+        APPEND <his> TO et_his_master.
+      WHEN co_part_rev OR co_review_ok OR co_toapproval.
+        APPEND <his> TO et_his_reviewer.
+    ENDCASE.
+  ENDLOOP.
+ENDMETHOD.
+
+
+method TEST.
+* Handmade test methods, as ABAP unit won't run for z objects
+  DATA: lt_log TYPE repdata_tt,
+        ls_log TYPE repdata_t,
+        r TYPE i,
+        i TYPE i,
+        cut type REF TO zcl_revapp_rep_iv,
+        lin type i,
+        fail type bool
+       .
+
+  WHILE r < 5.
+    r = r + 1.
+    WHILE i < 5.
+      i = i + 1.
+      ls_log-refno = r.
+      ls_log-item = i.
+      APPEND ls_log TO lt_log.
+    ENDWHILE.
+    CLEAR i.
+  ENDWHILE.
+
+data: lt_rakey type revapp_key_tt.
+  create object cut EXPORTING it_repdata = lt_log.
+  lt_rakey = cut->build_revapp_key_tab( ).
+  describe TABLE lt_rakey lines lin.
+  if lin <> 25.
+    message i000(su) with  'Build_revapp_key_tab( ) failed!'.
+    fail = abap_true.
+  endif.
+
+  data: lt_loghis type his_tt,
+        ls_loghis type his_t.
+
+  ls_loghis-refno = 1. ls_loghis-line_no = 1. ls_loghis-status = co_part_rev. ls_loghis-status_user = 'TSTUSER1'. APPEND LS_LOGHIS to lt_loghis.
+  ls_loghis-refno = 2. ls_loghis-line_no = 1. ls_loghis-status = co_part_rev. ls_loghis-status_user = 'TSTUSER1'. APPEND LS_LOGHIS to lt_loghis.
+  ls_loghis-refno = 2. ls_loghis-line_no = 2. ls_loghis-status = co_part_rev. ls_loghis-status_user = 'TSTUSER1'. APPEND LS_LOGHIS to lt_loghis.
+  ls_loghis-refno = 3. ls_loghis-line_no = 2. ls_loghis-status = co_part_rev. ls_loghis-status_user = 'TSTUSER2'. APPEND LS_LOGHIS to lt_loghis.
+  ls_loghis-refno = 3. ls_loghis-line_no = 3. ls_loghis-status = co_part_rev. ls_loghis-status_user = 'TSTUSER3'. APPEND LS_LOGHIS to lt_loghis.
+  ls_loghis-refno = 3. ls_loghis-line_no = 4. ls_loghis-status = co_review_ok. ls_loghis-status_user = 'TSTUSER4'. APPEND LS_LOGHIS to lt_loghis.
+  ls_loghis-refno = 3. ls_loghis-line_no = 5. ls_loghis-status = co_part_appr. ls_loghis-status_user = 'TSTUSER5'. APPEND LS_LOGHIS to lt_loghis.
+  ls_loghis-refno = 3. ls_loghis-line_no = 6. ls_loghis-status = co_approve_ok. ls_loghis-status_user = 'TSTUSER6'. APPEND LS_LOGHIS to lt_loghis.
+  cut->mt_his = lt_loghis.
+  cut->compress_his( ).
+  describe TABLE cut->mt_his lines lin.
+  if lin <> 7.
+    message i000(su) with  'compress_his( ) failed!'.
+    fail = abap_true.
+  endif.
+  loop at cut->mt_his into ls_loghis.
+    write:/ ls_loghis-refno, space, ls_loghis-line_no, space, ls_loghis-status, at 20 ls_loghis-status_user.
+  endloop.
+  if fail = abap_false.
+    message i000(su) with  'Tests Okay!'.
+  endif.
+  clear cut->mt_his.
+
+endmethod.
+
+
+method TEST2.
+  DATA:
+        lt_log TYPE STANDARD TABLE OF ziv_log,
+        lt_rep TYPE repdata_tt,
+        cut TYPE REF TO zcl_revapp_rep_iv,
+        ls_refno type zcl_iv_select=>zif_ra_sel~refno_t,
+        lt_refno type zcl_iv_select=>zif_ra_sel~refno_tt,
+        lo_alv type ref to cl_salv_table.
+  FIELD-SYMBOLS: <reprow> TYPE repdata_t,
+                 <logrow> TYPE ziv_log.
+  lt_refno = it_refno.
+  if lt_refno is initial.
+    ls_refno-refno = '0000024353'.
+    APPEND ls_refno to lt_refno.
+    ls_refno-refno = '0000040244'.
+    APPEND ls_refno to lt_refno.
+  endif.
+  SELECT * FROM ziv_log
+    INTO TABLE lt_log
+    FOR ALL ENTRIES IN lt_refno
+    WHERE refno = lt_refno-refno.
+  IF sy-subrc <> 0.
+    MESSAGE i000(su) WITH 'No matching log entries found!'.
+    RETURN.
+  ENDIF.
+  SELECT bukrs
+      belnr AS fi_document
+      gjahr AS fiscal_year
+      buzei AS item
+    FROM bseg
+    INTO CORRESPONDING FIELDS OF TABLE lt_rep
+    FOR ALL ENTRIES IN lt_log
+    WHERE bukrs = lt_log-bukrs
+      AND belnr = lt_log-fi_document
+      AND gjahr = lt_log-fiscal_year.
+  IF sy-subrc <> 0.
+    MESSAGE i000(su) WITH 'No matching BSEG entries found!'.
+    RETURN.
+  ENDIF.
+  SORT lt_log BY fi_document.
+  LOOP AT lt_rep ASSIGNING <reprow>.
+    READ TABLE lt_log WITH KEY fi_document = <reprow>-fi_document ASSIGNING <logrow> BINARY SEARCH.
+    MOVE-CORRESPONDING <logrow> TO <reprow>.
+  ENDLOOP.
+
+  CREATE OBJECT cut
+    EXPORTING
+      it_repdata = lt_rep.
+  cut->get_revapp_data( ).
+
+    cl_salv_table=>factory(
+    IMPORTING r_salv_table = lo_alv
+    changing t_table = cut->mt_repdata
+  ).
+  lo_alv->display( ).
+endmethod.
+
+
+method UPDATE_APPROVAL_DATA.
+* 12.11.2015 SolMan 8000002933: In IV, in the case that approver1 has forwarded to approver2,
+*  and approver2 has approved, the approver in zLOG_APPR is approver2 ( = iv_user in this module ).
+*  In MEMO it is approver1. Here in IV, we don't need to look for forward_a.
+
+* 17.11.: Substitute handling: if status_user in history table is substitute
+* then replace it with substituee
+
+  FIELD-SYMBOLS: <hisrow> TYPE his_t.
+  data lt_his type STANDARD TABLE OF ziv_loghis.
+
+  lt_his[] = mt_his[].
+  delete lt_his where refno <> iv_refno.
+
+* For approval tasks, if STATUS_USER was a substitute
+* get substituee into field SUBSTITUEE
+  CALL FUNCTION 'zIV_GET_OSLA_HIS_WI'
+    EXPORTING
+      IM_REFNO = iv_refno
+    CHANGING
+      CH_HIS   = lt_his.
+
+*  READ TABLE mt_his ASSIGNING <hisrow>
+  READ TABLE lt_his ASSIGNING <hisrow>
+    WITH KEY refno = iv_refno status_user = iv_user.
+  if sy-subrc ne 0.
+* Was there a substitute?
+    READ TABLE lt_his ASSIGNING <hisrow>
+      WITH KEY refno = iv_refno substituee = iv_user.
+  endif.
+  IF sy-subrc = 0.
+    cs_reprow-app_date = <hisrow>-status_date.
+    cs_reprow-app_time = <hisrow>-status_time.
+    cs_reprow-APPROVER = <hisrow>-status_user.      "17.11.
+  ENDIF.
+
+endmethod.
+
+
+METHOD update_review_data.
+* SolMan 8000002917: Consider the case where the master was the last to make changes to the row.
+* SolMan 8000002933: Also consider status FORWARD_R. This is the case where rev1 has changed the row and
+* then forwarded to rev2, who has clicked Approve without making modifications to the row.
+
+  DATA: lt_his_reviewer TYPE his_tt,
+        lt_his_master TYPE his_tt.
+  FIELD-SYMBOLS: <hisrow> TYPE his_t.
+
+* Split the history into reviewer and master statuses
+  LOOP AT mt_his ASSIGNING <hisrow> WHERE refno = iv_refno.
+    CASE <hisrow>-status.
+      WHEN co_toreview.
+        APPEND <hisrow> TO lt_his_master.
+      WHEN co_part_rev OR co_review_ok OR co_toapproval OR co_forward_r.
+        APPEND <hisrow> TO lt_his_reviewer.
+    ENDCASE.
+  ENDLOOP.
+
+* We've reduced mt_his to contain only the latest status change by the user, as only the latest is of interest,
+* whether it's approval or forwarding.
+  READ TABLE lt_his_reviewer ASSIGNING <hisrow>
+    WITH KEY refno = iv_refno status_user = iv_user BINARY SEARCH.
+  IF sy-subrc = 0.
+    cs_reprow-rev_date = <hisrow>-status_date.
+    cs_reprow-rev_time = <hisrow>-status_time.
+  ELSEIF cs_reprow-reskontra_tilioinyt = abap_true.
+*  The user was a master user, and we'll need to look for status TOREVIEW (see SolMan 8000002917)
+    READ TABLE lt_his_master ASSIGNING <hisrow>
+      WITH KEY refno = iv_refno status_user = iv_user BINARY SEARCH.
+    IF sy-subrc = 0.
+      cs_reprow-rev_date = <hisrow>-status_date.
+      cs_reprow-rev_time = <hisrow>-status_time.
+    ENDIF.
+  ENDIF.
+
+ENDMETHOD.
+ENDCLASS.
