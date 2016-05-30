@@ -1,0 +1,202 @@
+*&---------------------------------------------------------------------*
+*& Report  ZSD_PL_REQ_DELETE
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+
+INCLUDE zsd_pl_req_delete_top                   .    " global Data
+INCLUDE zsd_pl_req_delete_d01                   .  " class definitions
+
+* INCLUDE ZSD_PL_REQ_DELETE_O01                   .  " PBO-Modules
+* INCLUDE ZSD_PL_REQ_DELETE_I01                   .  " PAI-Modules
+* INCLUDE ZSD_PL_REQ_DELETE_F01                   .  " FORM-Routines
+
+PARAMETERS: p_sdate TYPE datum.
+SELECT-OPTIONS: s_req FOR req NO INTERVALS.
+PARAMETERS: p_test TYPE abap_bool DEFAULT abap_true.
+
+INCLUDE zsd_pl_req_delete_p01                   .  " class implementations
+
+AT SELECTION-SCREEN OUTPUT.
+  p_sdate = sy-datum - 100.
+
+START-OF-SELECTION.
+  lcl_req_del=>main( ).
+  
+*&---------------------------------------------------------------------*
+*& Include ZSD_PL_REQ_DELETE_TOP                             Report ZSD_PL_REQ_DELETE
+*&
+*&---------------------------------------------------------------------*
+
+REPORT   ZSD_PL_REQ_DELETE.
+data: req type ZZECOM_REQUEST,
+      dat type datum.
+      
+*&---------------------------------------------------------------------*
+*&  Include           ZSD_PL_REQ_DELETE_D01
+*&---------------------------------------------------------------------*
+CLASS lcl_req_del DEFINITION.
+  PUBLIC SECTION.
+    types: req_tt type STANDARD TABLE OF ZTSD_ECOM_PL_REQ with DEFAULT KEY,
+           reqsel_tt type range of ZZECOM_REQUEST.
+    CLASS-METHODS: main.
+*  METHODS: main.
+  PRIVATE SECTION.
+    data: requests type req_tt,
+          reqseltab type reqsel_tt,
+          maxreq type ZZECOM_REQUEST,
+          req_cnt type i,
+          sel_cnt type i,
+          fmt_cnt type i.
+    METHODS: select_req,
+             build_seltab,
+             delete_sel_fmt,
+             count_sel_fmt,
+             write_counts.
+
+ENDCLASS.                    "lcl_req_del DEFINITION
+
+*&---------------------------------------------------------------------*
+*&  Include           ZSD_PL_REQ_DELETE_I01
+*&---------------------------------------------------------------------*
+CLASS lcl_req_del IMPLEMENTATION.
+  METHOD main.
+    DATA: lo_del TYPE REF TO lcl_req_del.
+    CREATE OBJECT lo_del.
+    lo_del->select_req( ).
+*    lo_del->build_seltab( ).
+    IF p_test = abap_true.
+      lo_del->count_sel_fmt( ).
+    ELSE.
+      lo_del->delete_sel_fmt( ).
+    ENDIF.
+    lo_del->write_counts( ).
+  ENDMETHOD.                    "main
+  METHOD select_req.
+*    SELECT * FROM ztsd_ecom_pl_req
+*      UP TO 100 ROWS
+*      INTO TABLE me->requests
+*      WHERE created_on <= p_sdate.
+*  In fact, we can simplify database accesses knowing that requests always
+*  draw numbers from the same number range ZISA_PLREQ. See FM Z_SD_ISA_PRICELIST_REQUEST
+* We just pick the biggest number that fits into the dates, and delete all entries smaller than that.
+    IF s_req IS INITIAL.
+      SELECT MAX( request ) FROM ztsd_ecom_pl_req
+        INTO me->maxreq
+        WHERE created_on <= p_sdate.
+      IF sy-subrc <> 0.
+        me->maxreq = -1.
+      ENDIF.
+    ELSE.
+      MESSAGE i000(su) WITH 'Requests specified, date will be ignored'.
+      SELECT * FROM ztsd_ecom_pl_req
+        UP TO 100 ROWS
+        INTO TABLE me->requests
+        WHERE request IN s_req.
+    ENDIF.
+  ENDMETHOD.                    "select_req
+  METHOD build_seltab.
+    DATA: reqsel LIKE LINE OF me->reqseltab.
+    reqsel-sign = 'I'.
+    reqsel-option = 'EQ'.
+    FIELD-SYMBOLS: <req> TYPE ztsd_ecom_pl_req.
+    LOOP AT me->requests ASSIGNING <req>.
+      reqsel-low = <req>-request.
+      APPEND reqsel TO me->reqseltab.
+    ENDLOOP.
+  ENDMETHOD.                    "build_seltab
+  METHOD delete_sel_fmt.
+    IF s_req IS INITIAL.
+      DELETE FROM ztsd_ecom_pl_sel
+           WHERE request <= me->maxreq.
+* Not all requests have sel entries
+*      IF sy-subrc <> 0.
+*        ROLLBACK WORK.
+*        RETURN.
+*      ENDIF.
+      me->sel_cnt = sy-dbcnt.
+      DELETE FROM ztsd_ecom_pl_fmt
+        WHERE request <= me->maxreq.
+* Not all requests have fmt entries
+*      IF sy-subrc <> 0.
+*        me->sel_cnt = 0.
+*        ROLLBACK WORK.
+*        RETURN.
+*      ENDIF.
+      me->fmt_cnt = sy-dbcnt.
+      DELETE FROM ztsd_ecom_pl_req
+        WHERE request <= me->maxreq.
+      IF sy-subrc <> 0.
+        me->sel_cnt = 0.
+        me->fmt_cnt = 0.
+        ROLLBACK WORK.
+        RETURN.
+      ENDIF.
+      me->req_cnt = sy-dbcnt.
+
+    ELSE.
+      DELETE FROM ztsd_ecom_pl_sel
+        WHERE request IN s_req.
+*      IF sy-subrc <> 0.
+*        ROLLBACK WORK.
+*        RETURN.
+*      ENDIF.
+      me->sel_cnt = sy-dbcnt.
+      DELETE FROM ztsd_ecom_pl_fmt
+        WHERE request IN s_req.
+*      IF sy-subrc <> 0.
+*        me->sel_cnt = 0.
+*        ROLLBACK WORK.
+*        RETURN.
+*      ENDIF.
+      DELETE FROM ztsd_ecom_pl_req
+        WHERE request IN s_req.
+      IF sy-subrc <> 0.
+        me->sel_cnt = 0.
+        me->fmt_cnt = 0.
+        ROLLBACK WORK.
+        RETURN.
+      ENDIF.
+      me->req_cnt = sy-dbcnt.
+    ENDIF.
+* Implicit commit at end of work process.
+  ENDMETHOD.                    "delete_sel_fmt
+  METHOD count_sel_fmt.
+    IF s_req IS INITIAL.
+      SELECT COUNT(*) FROM ztsd_ecom_pl_sel
+          INTO me->sel_cnt
+           WHERE request <= me->maxreq.
+      SELECT COUNT(*) FROM ztsd_ecom_pl_fmt
+          INTO me->fmt_cnt
+           WHERE request <= me->maxreq.
+      SELECT COUNT(*) FROM ztsd_ecom_pl_req
+          INTO me->req_cnt
+           WHERE request <= me->maxreq.
+    ELSE.
+      SELECT COUNT(*) FROM ztsd_ecom_pl_sel
+          INTO me->sel_cnt
+           WHERE request IN s_req.
+      SELECT COUNT(*) FROM ztsd_ecom_pl_fmt
+          INTO me->fmt_cnt
+           WHERE request IN s_req.
+      SELECT COUNT(*) FROM ztsd_ecom_pl_req
+          INTO me->req_cnt
+           WHERE request IN s_req.
+    ENDIF.
+  ENDMETHOD.                    "delete_sel_fmt
+  METHOD write_counts.
+    IF p_test IS INITIAL.
+      WRITE:
+      'Number of requests deleted: ', me->req_cnt, /,
+      'Number of selection entries deleted: ', me->sel_cnt, /,
+      'Number of format entries deleted: ', me->fmt_cnt .
+    ELSE.
+      WRITE:
+      'Number of requests selected: ', me->req_cnt, /,
+      'Number of selection entries selected: ', me->sel_cnt, /,
+      'Number of format entries selected: ', me->fmt_cnt .
+    ENDIF.
+  ENDMETHOD.                    "write_counts
+ENDCLASS.                    "lcl_req_del IMPLEMENTATION
