@@ -1,0 +1,94 @@
+interface ZIF_MARTTI_PROL_DAO
+  public .
+
+
+  types:
+    filep_tt TYPE STANDARD TABLE OF filep WITH DEFAULT KEY .
+  types:
+    roles_tt TYPE SORTED TABLE OF bapiagr WITH UNIQUE KEY agr_name .
+  types:
+    BEGIN OF ext_command_param_t,
+      commandname           TYPE sxpgcolist-name,
+      additional_parameters TYPE  sxpgcolist-parameters,
+    END OF ext_command_param_t .
+
+  class-methods GET_FRONTEND_DIRNAME
+    returning
+      value(DIRECTORY) type FILEP .
+  methods GET_LOGS
+    importing
+      !SOCSECIDS type ZMARTTI_PROL_PRINT=>SOCSECID_RANGE
+      !PMT_DATES type ZMARTTI_PROL_PRINT=>PMT_DATE_RANGE
+      !COMPANY_CODE type BUKRS
+      !DOCTYPES type ZMARTTI_PROL_PRINT=>DOCTYPE_RANGE optional
+    returning
+      value(LOGS) type ZMARTTI_PROL_PRINT=>PROL_LOG_TT .
+  methods GET_ARCHIVE_OBJECT
+    importing
+      !ARCID type SAEARCHIVI
+      !ARCDOCID type /xxx/ARC_ID_IMG
+    returning
+      value(DATAXSTRING) type XSTRING
+    raising
+      ZCX_ARCHIVE_ACCESS .
+  methods SAVE_TO_APP_SERVER
+    importing
+      !DATAXSTRING type XSTRING
+      !FILEPATH type FILEP
+    raising
+      ZCX_FILE_ACCESS .
+  methods SAVE_TO_LOCAL
+    importing
+      !DATAXSTRING type XSTRING
+      !FILEPATH type FILEP
+    raising
+      ZCX_FILE_ACCESS .
+  methods NUMBER_GET_NEXT
+    returning
+      value(NUMBER) type NUMC10 .
+  methods EXECUTE_EXTERNAL_COMMAND
+    importing
+      !PARAMETERS type SXPGCOLIST
+    raising
+      ZCX_EXTERNAL_COMMAND .
+  methods READ_FROM_APP_SERVER
+    importing
+      !FILEPATH type FILEP
+    returning
+      value(DATAXSTRING) type XSTRING
+    raising
+      ZCX_FILE_ACCESS .
+  methods DELETE_FROM_APP_SERVER
+    importing
+      !FILEPATH type FILEP
+    raising
+      ZCX_FILE_ACCESS .
+  methods CHECK_DIRECTORY
+    importing
+      !DIRPATH type FILEP
+    returning
+      value(OK) type ABAP_BOOL
+    raising
+      ZCX_FILE_ACCESS .
+  methods GET_PARAMETER
+    importing
+      !NAME type /xxx/PARAMNAME
+      !PROCESS type /xxx/IV_PROCESS default 'PROL'
+    returning
+      value(VALUE) type /xxx/PARAMVALUE
+    raising
+      ZCX_MISSING_PARAMETER .
+  methods GET_USER_ROLES
+    importing
+      !USER type UNAME default SY-UNAME
+    returning
+      value(ROLES) type ROLES_TT .
+  methods LIST_FILES_IN_DIRECTORY
+    importing
+      !DIRECTORY type FILEP
+      !FILENAME_MASK type FILEP
+    returning
+      value(FILENAMES) type FILEP_TT
+    raising
+      ZCX_FILE_ACCESS .
+endinterface.

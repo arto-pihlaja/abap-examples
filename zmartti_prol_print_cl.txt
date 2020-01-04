@@ -1,0 +1,532 @@
+class ZMARTTI_PROL_PRINT definition
+  public
+  final
+  create public .
+
+public section.
+
+  types:
+    DOCTYPE_RANGE type RANGE OF /xxx/log_prol-document_type .
+  types:
+    reprow_tt TYPE STANDARD TABLE OF /xxx/log_prol_rep WITH DEFAULT KEY .
+  types:
+    BEGIN OF process_log_t,
+        refno           TYPE /xxx/iv_refno,
+        processno       TYPE i,
+        source_system   TYPE /xxx/log_prol-source_system,
+        socsecid        TYPE /xxx/log_prol-ssecurity_id,
+        person_name     TYPE /xxx/log_prol-person_name,
+        arc_filename    TYPE /xxx/log_prol-filename,
+        arc_filetype    TYPE /xxx/log_prol-filetype,
+        archive_id      TYPE /xxx/log_prol-archive_id,
+        arc_doc_id      TYPE /xxx/log_prol-arc_doc_id,
+        archive_success TYPE text5,
+        temp_filepath   TYPE filep,
+        output_filepath TYPE filep,
+      END OF process_log_t .
+  types:
+    process_log_tt TYPE STANDARD TABLE OF process_log_t WITH KEY refno .
+  types:
+    BEGIN OF testmode_t,
+        refno           TYPE /xxx/iv_refno,
+        socsecid        TYPE /xxx/log_prol-ssecurity_id,
+        arc_filename    TYPE /xxx/log_prol-filename,
+        arc_filetype    TYPE /xxx/log_prol-filetype,
+        archive_success TYPE text5,
+        output_filepath TYPE filep,
+      END OF testmode_t .
+  types:
+    BEGIN OF tmp_files_t,
+        no          TYPE i,
+        ssecurityid TYPE /xxx/log_prol-ssecurity_id,
+        fpath       TYPE filep,
+      END OF tmp_files_t .
+  types:
+    testmode_tt TYPE STANDARD TABLE OF testmode_t WITH KEY socsecid .
+  types:
+    tmp_files_tt TYPE SORTED TABLE OF tmp_files_t WITH UNIQUE KEY fpath .
+  types:
+    prol_log_tt TYPE SORTED TABLE OF /xxx/log_prol WITH UNIQUE KEY ssecurity_id refno .
+  types:
+    socsecid_tt TYPE SORTED TABLE OF /xxx/log_prol-ssecurity_id .
+  types:
+    socsecid_range TYPE RANGE OF /xxx/log_prol-ssecurity_id .
+  types:
+    pmt_date_range TYPE RANGE OF /xxx/log_prol-date2 .
+  types:
+    BEGIN OF selection_parameters_t,
+        bukrs           TYPE bukrs,
+        socsecids       TYPE socsecid_range,
+        pmtdates        TYPE pmt_date_range,
+        test            TYPE abap_bool,
+        one             TYPE char1,
+        many            TYPE char1,
+        directory       TYPE filep,
+        filenamepattern TYPE filep.
+    TYPES: END OF selection_parameters_t .
+
+  constants DIR_SEPARATOR type CHAR1 value '\' ##NO_TEXT.
+  data MESSAGES type BAPIRET2TAB read-only .
+  data TESTMODE_DATA type TESTMODE_TT read-only .
+  data PROCESSLOG type PROCESS_LOG_TT read-only .
+  constants PRINT_ROLE_PARAMNAME type /xxx/PARAMNAME value 'ROLE_PROL_PRINT' ##NO_TEXT.
+
+  class-methods CLASS_CONSTRUCTOR .
+  methods CONSTRUCTOR
+    importing
+      !PROL_DAO type ref to ZIF_MARTTI_PROL_DAO optional .
+  methods PRINT_DOCUMENTS
+    importing
+      !REPORT_PARAMETERS type SELECTION_PARAMETERS_T
+      !PROL_LOGS type PROL_LOG_TT .
+  class-methods PRINT_ROWS_FROM_REPORT
+    importing
+      !REPORTROWS type REPROW_TT
+      !PARAMETERS type SELECTION_PARAMETERS_T .
+  methods GET_COMPANIES
+    importing
+      !USER type UNAME default SY-UNAME
+    returning
+      value(COMP_LIST) type T_BUKRS .
+  class-methods HAS_PRINT_ACCESS
+    importing
+      !USER type UNAME default SY-UNAME
+    returning
+      value(OK) type ABAP_BOOL .
+protected section.
+private section.
+
+  data SOCSECIDS type /xxx/LOG_PROL-SSECURITY_ID .
+  data SUBROUTINE_OBJECT type ref to OBJECT .
+  data DAO type ref to ZIF_MARTTI_PROL_DAO .
+  data TMPFILENO type I .
+  data PARAMETERS type SELECTION_PARAMETERS_T .
+  class-data TMP_FILE_MASK type FILEP .
+  class-data APPSERVER_DIRECTORY type FILEP .
+  data TMPFILES type TMP_FILES_TT .
+  class-data MERGED_FILE_MASK type FILEP .
+  data FINALFILENO type I .
+  data MSG_DUMMY type BAPIRET2-MESSAGE .
+  data LOGCOUNT type I .
+  data PROCESSLOGROW type ref to PROCESS_LOG_T .
+  data PREVIOUSLOGROW type PROCESS_LOG_T .
+
+  methods DELETE_TEMP_FILES
+    importing
+      !LOGROW type PROCESS_LOG_T .
+  methods MERGE_TEMP_FILES
+    importing
+      !LOGROW type PROCESS_LOG_T
+    returning
+      value(DATA) type XSTRING .
+  methods GET_TEMP_FILE_NAME
+    returning
+      value(TMPFILENAME) type FILEP .
+  methods GET_ARCHIVE_OBJECT
+    returning
+      value(DATA) type XSTRING .
+  methods SAVE_FINAL_FILE
+    importing
+      !DATA type XSTRING
+      !LOGROW type PROCESS_LOG_T .
+  methods SAVE_TO_TEMP
+    importing
+      !DATA type XSTRING .
+  methods COLLECT_MESSAGES
+    importing
+      !TYPE type SY-MSGTY optional
+      !NUMBER type SY-MSGNO default '000'
+      !ID type SY-MSGID default '/xxx/LIV'
+      !V1 type SY-MSGV1 optional
+      !V2 type TEXT50 optional
+      !V3 type SY-MSGV3 optional .
+  methods COPY_TO_PROCESSLOGROW
+    importing
+      !PROLLOGROW type ref to /xxx/LOG_PROL .
+ENDCLASS.
+
+
+
+CLASS ZMARTTI_PROL_PRINT IMPLEMENTATION.
+
+
+  METHOD class_constructor.
+    DATA pval TYPE /xxx/paramvalue.
+    CALL FUNCTION '/xxx/IV_READ_HCVAL'
+      EXPORTING
+        im_name    = 'PRINT_FILE_PATH'
+        im_process = 'PROL'
+      IMPORTING
+        ex_value   = pval
+      EXCEPTIONS
+        not_found  = 1
+        OTHERS     = 2.
+    appserver_directory = pval.
+    IF appserver_directory IS INITIAL.
+      appserver_directory = 'E:\pdftk\'.
+    ENDIF.
+    DATA(len) = strlen( appserver_directory ) - 1.
+    IF appserver_directory+len(1) <> dir_separator.
+      appserver_directory = appserver_directory && dir_separator.
+    ENDIF.
+
+    CLEAR pval.
+    CALL FUNCTION '/xxx/IV_READ_HCVAL'
+      EXPORTING
+        im_name    = 'PRINT_TMPFILE_MASK'
+        im_process = 'PROL'
+      IMPORTING
+        ex_value   = pval
+      EXCEPTIONS
+        not_found  = 1
+        OTHERS     = 2.
+    tmp_file_mask = pval.
+    IF tmp_file_mask IS INITIAL.
+      tmp_file_mask = 'merge_'.
+    ENDIF.
+    REPLACE '<SY-UNAME>' IN tmp_file_mask WITH sy-uname.
+    REPLACE '<SY-DATUM>' IN tmp_file_mask WITH sy-datum.
+
+    CALL FUNCTION '/xxx/IV_READ_HCVAL'
+      EXPORTING
+        im_name    = 'PRINT_MERGEDFILE_MASK'
+        im_process = 'PROL'
+      IMPORTING
+        ex_value   = pval
+      EXCEPTIONS
+        not_found  = 1
+        OTHERS     = 2.
+    merged_file_mask = pval.
+    IF merged_file_mask IS INITIAL.
+      merged_file_mask = 'merged_'.
+    ENDIF.
+
+  ENDMETHOD.
+
+
+  METHOD collect_messages.
+
+    APPEND INITIAL LINE TO messages REFERENCE INTO DATA(msg).
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4 INTO msg->message.
+    msg->id = sy-msgid.
+    msg->type = sy-msgty.
+    msg->number = sy-msgno.
+    msg->message_v1 = sy-msgv1.
+    msg->message_v2 = sy-msgv2.
+    msg->message_v3 = sy-msgv3.
+    msg->message_v4 = sy-msgv4.
+  ENDMETHOD.
+
+
+  METHOD constructor.
+    IF prol_dao IS BOUND.
+      dao = prol_dao.
+    ELSE.
+      dao = NEW zmartti_prol_dao( ).
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD copy_to_processlogrow.
+    APPEND INITIAL LINE TO processlog REFERENCE INTO processlogrow.
+    MOVE-CORRESPONDING prollogrow->* TO processlogrow->*.
+    processlogrow->processno = logcount.
+    processlogrow->arc_filename = prollogrow->filename.
+    processlogrow->arc_filetype = prollogrow->filetype.
+    processlogrow->socsecid = prollogrow->ssecurity_id.
+  ENDMETHOD.
+
+
+  METHOD delete_temp_files.
+    DATA(fmask) = CONV filep( tmp_file_mask && logrow-socsecid && '*' ).
+    TRY.
+        DATA(tmpfiles) = dao->list_files_in_directory( directory = appserver_directory filename_mask = fmask ).
+      CATCH zcx_file_access.
+        MESSAGE i000(su) WITH TEXT-005 fmask INTO msg_dummy.
+        collect_messages( ).
+    ENDTRY.
+
+    LOOP AT tmpfiles REFERENCE INTO DATA(tf).
+      IF parameters-test = abap_false.
+        TRY.
+            dao->delete_from_app_server( tf->* ).
+          CATCH zcx_file_access.
+            MESSAGE i000(su) WITH TEXT-005 tf->* INTO msg_dummy.
+            collect_messages( ).
+            CONTINUE.
+        ENDTRY.
+      ENDIF.
+      DATA(deleted_file_path) = CONV filep( appserver_directory && tf->* ).
+      READ TABLE processlog WITH KEY temp_filepath = deleted_file_path REFERENCE INTO DATA(pl).
+      IF sy-subrc = 0.
+        pl->temp_filepath = '<deleted>'.
+      ENDIF.
+    ENDLOOP.
+
+* Verify that files have indeed been deleted. See CER-1157.
+    TRY.
+        DATA(tmpfiles2) = dao->list_files_in_directory( directory = appserver_directory filename_mask = fmask ).
+      CATCH zcx_file_access.
+    ENDTRY.
+    IF lines( tmpfiles2 ) > 0.
+      MESSAGE i000(su) WITH TEXT-005 fmask INTO msg_dummy.
+      collect_messages( ).
+    ENDIF.
+
+    IF parameters-test = abap_false.
+      DATA: mergedfile TYPE filep.
+      mergedfile = appserver_directory && merged_file_mask && logrow-socsecid && '.pdf'.
+      REPLACE tmp_file_mask IN mergedfile WITH merged_file_mask .
+      TRY.
+          dao->delete_from_app_server( mergedfile ).
+        CATCH zcx_file_access.
+          MESSAGE i000(su) WITH TEXT-005 mergedfile INTO msg_dummy.
+          collect_messages( ).
+      ENDTRY.
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD get_archive_object.
+
+    IF processlogrow->archive_id IS INITIAL OR processlogrow->arc_doc_id IS INITIAL.
+      MESSAGE i000(/xxx/liv) WITH TEXT-003 processlogrow->refno INTO msg_dummy.
+      collect_messages( ).
+      processlogrow->archive_success = 'No'.
+      RETURN.
+    ENDIF.
+
+    TRY.
+        data = dao->get_archive_object( arcid = processlogrow->archive_id arcdocid = processlogrow->arc_doc_id ).
+      CATCH zcx_archive_access.
+        MESSAGE e008(/xxx/liv) WITH 'refno ' processlogrow->refno INTO msg_dummy.
+        collect_messages( ).
+        processlogrow->archive_success = 'No'.
+        RETURN.
+    ENDTRY.
+    processlogrow->archive_success = 'Yes'.
+
+  ENDMETHOD.
+
+
+  METHOD get_companies.
+    TRY.
+        DATA(pval) = dao->get_parameter( print_role_paramname ).
+      CATCH zcx_missing_parameter.
+        MESSAGE e114(/xxx/liv) WITH '/xxx/NAMV_PROL' print_role_paramname INTO msg_dummy.
+        collect_messages( ).
+        RETURN.
+    ENDTRY.
+    DATA(roles) = dao->get_user_roles( user ).
+    DELETE roles WHERE from_dat > sy-datlo.
+    DELETE roles WHERE to_dat < sy-datlo.
+    TRANSLATE pval TO UPPER CASE.
+    SPLIT pval AT 'XXXX' INTO DATA(prefix) DATA(suffix). "pval like 'Z_ECC_OLK_XXXX_PROLPRINT'
+    pval = prefix && '*' && suffix.
+    LOOP AT roles REFERENCE INTO DATA(role) WHERE agr_name CP pval.
+      DATA(offset) = strlen( prefix ).
+      DATA(company_code) = role->agr_name+offset(4).
+      APPEND company_code TO comp_list.
+    ENDLOOP.
+
+  ENDMETHOD.
+
+
+  METHOD get_temp_file_name.
+
+    tmpfilename = tmp_file_mask && processlogrow->socsecid && '_' && tmpfileno && '.pdf'.
+
+  ENDMETHOD.
+
+
+  METHOD has_print_access.
+    DATA(this) = NEW zmartti_prol_print( ).
+    DATA(comp) = this->get_companies( user ).
+    IF lines( comp ) > 0.
+      ok = abap_true.
+    ELSE.
+      ok = abap_false.
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD merge_temp_files.
+
+    data tmpfilepattern type filep.
+    tmpfilepattern = appserver_directory && tmp_file_mask && logrow-socsecid.
+
+    DATA: mergedfilepath TYPE filep.
+    mergedfilepath = appserver_directory && merged_file_mask && logrow-socsecid && '.pdf'.
+    IF parameters-test = abap_false.
+      DATA: filenames TYPE sxpgcolist-parameters.  "char255
+      CONCATENATE tmpfilepattern mergedfilepath into filenames SEPARATED BY space.     " path\tmpfile.pdf path\mergedfile.pdf
+      DATA(ext_param) = VALUE sxpgcolist( name = 'ZMERGEPDF' parameters = filenames ).
+      TRY.
+          dao->execute_external_command( ext_param ).
+        CATCH zcx_external_command INTO DATA(exc).
+          MESSAGE i000(su) WITH 'SXPG_COMMAND_EXECUTE exitcode ' exc->exitcode INTO msg_dummy.
+          collect_messages( ).
+      ENDTRY.
+      TRY.
+          data = dao->read_from_app_server( mergedfilepath ).
+        CATCH zcx_file_access.
+          MESSAGE i000(su) WITH text-004 mergedfilepath INTO msg_dummy.
+          collect_messages( ).
+      ENDTRY.
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD print_documents.
+
+    parameters = report_parameters.
+    IF lines( prol_logs ) = 0.
+      MESSAGE e000(/xxx/liv) WITH  TEXT-001 INTO msg_dummy.
+      collect_messages( ).
+      RETURN.
+    ENDIF.
+    TRY.
+        dao->check_directory( parameters-directory ).
+      CATCH zcx_file_access.
+        MESSAGE e000(/xxx/liv) WITH TEXT-002 parameters-directory INTO msg_dummy.
+        collect_messages( ).
+        RETURN.
+    ENDTRY.
+    DATA: "prev_socsecurityid TYPE /xxx/log_prol-ssecurity_id,
+          data_to_save       TYPE xstring,
+          pl                 TYPE REF TO /xxx/log_prol.
+
+    finalfileno = 0.
+    tmpfileno = 0.
+    logcount = 0.
+    IF parameters-many = abap_true.
+*      Many files per socialsecurityid
+      LOOP AT prol_logs REFERENCE INTO pl.
+        logcount = logcount + 1.
+        copy_to_processlogrow( pl ).
+        data_to_save = get_archive_object( ).
+        save_final_file( logrow = processlogrow->* data = data_to_save  ).
+        CLEAR: previouslogrow, data_to_save.
+        previouslogrow = processlogrow->*.
+      ENDLOOP.
+    ELSE.
+*        Merge into one file per socialsecurityid
+      LOOP AT prol_logs REFERENCE INTO pl.
+        logcount = logcount + 1.
+        copy_to_processlogrow( pl ).
+        data_to_save = get_archive_object( ).
+        save_to_temp( data_to_save ).
+        IF processlogrow->socsecid <> previouslogrow-socsecid AND logcount > 1.
+          data_to_save = merge_temp_files( previouslogrow ).
+          save_final_file( logrow = previouslogrow data = data_to_save  ).
+          delete_temp_files( previouslogrow ).
+        ENDIF.
+        CLEAR: previouslogrow, data_to_save.
+        previouslogrow = processlogrow->*.
+      ENDLOOP.
+      data_to_save = merge_temp_files( previouslogrow ).
+      save_final_file( logrow = previouslogrow data = data_to_save  ).
+      delete_temp_files( previouslogrow ).
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD print_rows_from_report.
+    DATA: prolrows TYPE prol_log_tt,
+          prolrow  TYPE /xxx/log_prol.
+    LOOP AT reportrows REFERENCE INTO DATA(rr).
+      MOVE-CORRESPONDING rr->* TO prolrow.
+      INSERT prolrow INTO TABLE prolrows .
+    ENDLOOP.
+    DATA(this) = NEW zmartti_prol_print( ).
+    this->print_documents( prol_logs = prolrows report_parameters = parameters ).
+
+  ENDMETHOD.
+
+
+METHOD SAVE_FINAL_FILE.
+* determine filetype
+  DATA: fn200    TYPE filep,
+        filetype TYPE /xxx/iv_filetype.
+  filetype = logrow-arc_filetype.
+  IF filetype IS INITIAL.
+    fn200 = logrow-arc_filename.
+    CALL FUNCTION 'CV120_SPLIT_FILE'
+      EXPORTING
+        pf_file          = fn200
+      IMPORTING
+*          pfx_extension
+        pfx_dotextension = filetype.
+  ENDIF.
+  IF filetype IS INITIAL.
+    filetype = '.pdf'. "default
+  ENDIF.
+
+* make sure filetype begins with dot
+  IF filetype(1) <> '.'.
+    filetype = '.' && filetype.
+  ENDIF.
+
+* Remove extra slash/backslash from directory
+  DATA(len) = strlen( parameters-directory ) - 1.
+  IF parameters-directory+len(1) = dir_separator.
+    parameters-directory = parameters-directory(len).
+  ENDIF.
+
+* construct filepath (path+name) for saving final file
+  DATA: filepath TYPE filep.
+  IF parameters-one = abap_true OR previouslogrow-socsecid <> processlogrow->socsecid.
+    finalfileno = 0.
+  ENDIF.
+  finalfileno = finalfileno + 1.
+  filepath = parameters-directory && dir_separator && parameters-filenamepattern && '_' && logrow-socsecid && '_' && finalfileno && filetype.
+
+  IF parameters-test = abap_false.
+    IF data IS INITIAL.
+      CLEAR filepath.
+    ELSE.
+      TRY.
+          dao->save_to_local( dataxstring = data filepath = filepath ).
+        CATCH zcx_file_access.
+          MESSAGE e000(/xxx/liv) WITH TEXT-000 filepath INTO msg_dummy.
+          collect_messages( ).
+          RETURN.
+      ENDTRY.
+    ENDIF.
+  ENDIF.
+
+  IF parameters-one = abap_true.
+*    All archive docs of one social sec.id are merged into one file.
+    LOOP AT processlog REFERENCE INTO DATA(pl) WHERE socsecid = logrow-socsecid.
+      pl->output_filepath = filepath.
+    ENDLOOP.
+  ELSE.
+* Only the currently processed log row
+    processlogrow->output_filepath = filepath.
+  ENDIF.
+
+
+ENDMETHOD.
+
+
+  METHOD save_to_temp.
+    IF data IS INITIAL AND parameters-test = abap_false.
+      RETURN.
+    ENDIF.
+    tmpfileno = tmpfileno + 1.
+    DATA(filename) = get_temp_file_name( ).
+    DATA: filepath TYPE filep.
+    filepath = appserver_directory && filename.
+    processlogrow->temp_filepath = filepath.
+    IF parameters-test = abap_false.
+      TRY.
+          dao->save_to_app_server( filepath = filepath dataxstring = data ).
+        CATCH zcx_file_access.
+          MESSAGE e000(/xxx/liv) WITH TEXT-000 filepath INTO msg_dummy.
+          collect_messages( ).
+          RETURN.
+      ENDTRY.
+    ENDIF.
+
+  ENDMETHOD.
+ENDCLASS.

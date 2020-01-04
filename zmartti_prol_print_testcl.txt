@@ -1,0 +1,343 @@
+﻿*"* use this source file for your ABAP unit test classes
+CLASS dao_spy DEFINITION.
+  PUBLIC SECTION.
+    TYPES: BEGIN OF filerow,
+             no    TYPE i,
+             fpath TYPE filep,
+           END OF filerow.
+    DATA:
+      tmpfiles    TYPE STANDARD TABLE OF filep,
+      finalfiles  TYPE SORTED TABLE OF filerow WITH UNIQUE KEY no,
+      mergedfiles TYPE SORTED TABLE OF filerow WITH UNIQUE KEY fpath,
+      data        TYPE crd_t_1024.
+ENDCLASS.
+CLASS dao_spy IMPLEMENTATION.
+ENDCLASS.
+
+CLASS mock_dao DEFINITION.
+  PUBLIC SECTION.
+    INTERFACES: zif_martti_prol_dao.
+    TYPES: BEGIN OF filerow,
+             no    TYPE i,
+             fpath TYPE filep,
+           END OF filerow.
+    METHODS: constructor IMPORTING spy TYPE REF TO dao_spy.
+    DATA:
+*      processlog type zmartti_prol_print=>process_log_tt,
+      logs TYPE zmartti_prol_print=>prol_log_tt,
+      fidx TYPE i,
+      spy  TYPE REF TO dao_spy.
+ENDCLASS.
+CLASS mock_dao IMPLEMENTATION.
+  METHOD constructor.
+    me->spy = spy.
+  ENDMETHOD.
+  METHOD zif_martti_prol_dao~get_logs.
+    logs = me->logs.
+
+  ENDMETHOD.
+  METHOD zif_martti_prol_dao~get_archive_object.
+    IF arcdocid = 'error'.
+      RAISE EXCEPTION TYPE zcx_archive_access.
+    ELSE.
+      dataxstring = '1'.
+    ENDIF.
+  ENDMETHOD.
+  METHOD zif_martti_prol_dao~save_to_local.
+    fidx = fidx + 1.
+    DATA(frow) = VALUE filerow( no = fidx fpath = filepath ).
+    INSERT frow INTO TABLE spy->finalfiles.
+  ENDMETHOD.
+  METHOD zif_martti_prol_dao~save_to_app_server.
+    APPEND filepath TO spy->tmpfiles.
+  ENDMETHOD.
+  METHOD zif_martti_prol_dao~read_from_app_server.
+    IF line_exists( spy->mergedfiles[ fpath = filepath ] ).
+      dataxstring = 1.
+    ENDIF.
+  ENDMETHOD.
+  METHOD zif_martti_prol_dao~execute_external_command.
+    SPLIT parameters-parameters AT space INTO DATA(tmpmask) DATA(mergepath).
+    IF tmpmask CS 'merge_error'.
+      RAISE EXCEPTION TYPE zcx_external_command.
+    ENDIF.
+    DATA(mrow) = VALUE filerow( no = 1 fpath = mergepath ).
+    INSERT mrow INTO TABLE spy->mergedfiles.
+  ENDMETHOD.
+  METHOD zif_martti_prol_dao~number_get_next.
+  ENDMETHOD.
+  METHOD zif_martti_prol_dao~delete_from_app_server.
+    DELETE TABLE spy->tmpfiles FROM filepath.
+  ENDMETHOD.
+  METHOD zif_martti_prol_dao~check_directory.
+  ENDMETHOD.
+  METHOD zif_martti_prol_dao~get_frontend_dirname.
+  ENDMETHOD.
+  METHOD zif_martti_prol_dao~get_parameter.
+    value = 'Z_ECC_OLK_XXXX_PROLPRINT'.
+  ENDMETHOD.
+  METHOD zif_martti_prol_dao~get_user_roles.
+    DATA(role) = VALUE bapiagr( agr_name = 'Z_ECC_OLK_1000_PROLPRINT' from_dat = '20000101' to_dat = '20991231' ).
+    INSERT role INTO TABLE roles.
+    role = VALUE bapiagr( agr_name = 'Z_FOOBAR' from_dat = '20000101' to_dat = '20991231' ).
+    INSERT role INTO TABLE roles.
+    role = VALUE bapiagr( agr_name = 'Y_FOOBAR' from_dat = '20000101' to_dat = '20991231' ).
+    INSERT role INTO TABLE roles.
+  ENDMETHOD.
+  METHOD zif_martti_prol_dao~list_files_in_directory.
+
+    LOOP AT spy->tmpfiles REFERENCE INTO DATA(tf).
+      DATA(fpath) = tf->*.
+      SPLIT fpath AT zmartti_prol_print=>dir_separator INTO TABLE DATA(fpathparts).
+      DATA(fname) = CONV filep( fpathparts[ lines( fpathparts ) ] ).
+      APPEND INITIAL LINE TO filenames REFERENCE INTO DATA(fn).
+      fn->* = fname.
+    ENDLOOP.
+  ENDMETHOD.
+ENDCLASS.
+
+CLASS print_test DEFINITION FOR TESTING
+  DURATION SHORT
+  RISK LEVEL HARMLESS
+.
+*?﻿<asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
+*?<asx:values>
+*?<TESTCLASS_OPTIONS>
+*?<TEST_CLASS>print_Test
+*?</TEST_CLASS>
+*?<TEST_MEMBER>f_Cut
+*?</TEST_MEMBER>
+*?<OBJECT_UNDER_TEST>ZMARTTI_PROL_PRINT
+*?</OBJECT_UNDER_TEST>
+*?<OBJECT_IS_LOCAL/>
+*?<GENERATE_FIXTURE>X
+*?</GENERATE_FIXTURE>
+*?<GENERATE_CLASS_FIXTURE/>
+*?<GENERATE_INVOCATION>X
+*?</GENERATE_INVOCATION>
+*?<GENERATE_ASSERT_EQUAL>X
+*?</GENERATE_ASSERT_EQUAL>
+*?</TESTCLASS_OPTIONS>
+*?</asx:values>
+*?</asx:abap>
+  PRIVATE SECTION.
+    DATA:
+      f_cut    TYPE REF TO zmartti_prol_print,
+      prol_dao TYPE REF TO zif_martti_prol_dao,
+      spy      TYPE REF TO dao_spy.
+
+    METHODS: setup.
+    METHODS: teardown.
+    METHODS: print_no_logentries FOR TESTING.
+    METHODS: print_simple FOR TESTING.
+    METHODS: print_multiple FOR TESTING.
+    METHODS: print_merge2 FOR TESTING.
+    METHODS: print_merge_testmode FOR TESTING.
+    METHODS: get_companies FOR TESTING.
+    METHODS: handle_merge_error FOR TESTING.
+    METHODS: handle_archive_error FOR TESTING.
+ENDCLASS.       "print_Test
+
+
+CLASS print_test IMPLEMENTATION.
+
+  METHOD setup.
+    spy = NEW dao_spy( ).
+    prol_dao = NEW mock_dao( spy ).
+    CREATE OBJECT f_cut
+      EXPORTING
+        prol_dao = prol_dao.
+  ENDMETHOD.
+
+
+  METHOD teardown.
+    DATA: mdao       TYPE REF TO mock_dao.
+    mdao ?= prol_dao.
+    CLEAR: mdao->logs, spy->data, spy->finalfiles, mdao->fidx.
+  ENDMETHOD.
+
+
+  METHOD print_no_logentries.
+* Verify the method at least runs without errors, even if no log entries match the criteria
+    DATA parameters TYPE zmartti_prol_print=>selection_parameters_t.
+    parameters = VALUE #( filenamepattern = 'filename' directory = 'C:\zzztest' ).
+    DATA(logs) = VALUE zmartti_prol_print=>prol_log_tt( ( ) ).
+    f_cut->print_documents( prol_logs = logs report_parameters = parameters ).
+
+  ENDMETHOD.
+
+  METHOD print_simple.
+* One log entry --> one file
+    DATA(parameters) = VALUE zmartti_prol_print=>selection_parameters_t( filenamepattern = 'filename' directory = 'C:\zzztest' many = abap_true ).
+*    DATA: mdao       TYPE REF TO mock_dao.
+*    mdao ?= prol_dao.
+*    mdao->logs
+    DATA(logs) = VALUE zmartti_prol_print=>prol_log_tt(
+      ( refno = 1 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456Z'
+      archive_id = 'TT' arc_doc_id = '005056BE4D871ED5A6B2F225FF7F6207' filename = 'XMLLASK_010274-140V_J_610989_240208_30-05-2014.PDF' filetype = '' )
+    ).
+
+    f_cut->print_documents( prol_logs = logs report_parameters = parameters ).
+
+    cl_abap_unit_assert=>assert_equals( exp = 'C:\zzztest\filename_112233-456Z_1.PDF'
+      act = spy->finalfiles[ no = 1 ]-fpath msg = 'Correct filename construction' ).
+
+  ENDMETHOD.
+  METHOD print_multiple.
+* Several log entries to same ssecid --> same number of files
+    DATA(parameters) = VALUE zmartti_prol_print=>selection_parameters_t( filenamepattern = 'filename' directory = 'C:\zzztest' many = abap_true ).
+    DATA: mdao       TYPE REF TO mock_dao.
+    mdao ?= prol_dao.
+    mdao->logs = VALUE #(
+      ( refno = 1 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456Z'
+      archive_id = 'TT' arc_doc_id = '005056BE4D871ED5A6B2F225FF7F6207' filename = 'XMLLASK_010274-140V_J_610989_240208_30-05-2014.PDF' filetype = '' )
+      ( refno = 3 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456X'
+      archive_id = 'TT' arc_doc_id = 'foo' filename = 'bar' filetype = 'PDF' )
+      ( refno = 2 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456Z'
+      archive_id = 'TT' arc_doc_id = 'foo' filename = 'file2.PDF' filetype = '' )
+    ).
+    " table type of mdao->logs will sort the entries
+    f_cut->print_documents( prol_logs = mdao->logs report_parameters = parameters ).
+
+    cl_abap_unit_assert=>assert_equals( exp = 3
+      act = lines( spy->finalfiles ) msg = 'Right number of output files' ).
+
+    cl_abap_unit_assert=>assert_equals( exp = 'C:\zzztest\filename_112233-456Z_2.PDF'
+      act = spy->finalfiles[ no = 3 ]-fpath msg = 'Correct filename construction' ).
+
+  ENDMETHOD.
+  METHOD print_merge2.
+* Several log entries to same ssecid, option merge --> same number of files as ssecid
+    DATA(parameters) = VALUE zmartti_prol_print=>selection_parameters_t( filenamepattern = 'filename' directory = 'C:\zzztest' one = abap_true ).
+    DATA: mdao       TYPE REF TO mock_dao.
+    mdao ?= prol_dao.
+    mdao->logs = VALUE #(
+      ( refno = 1 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456Z'
+      archive_id = 'TT' arc_doc_id = '005056BE4D871ED5A6B2F225FF7F6207' filename = 'XMLLASK_010274-140V_J_610989_240208_30-05-2014.PDF' filetype = '' )
+      ( refno = 2 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456Z'
+      archive_id = 'TT' arc_doc_id = 'foo' filename = 'file2.PDF' filetype = '' )
+      ( refno = 3 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456X'
+      archive_id = 'TT' arc_doc_id = 'foo' filename = 'bar' filetype = 'PDF' )
+      ( refno = 4 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456Y'
+      archive_id = 'TT' arc_doc_id = 'foo' filename = 'bar' filetype = 'PDF' )
+      ( refno = 5 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456Y'
+      archive_id = 'TT' arc_doc_id = 'foo' filename = 'bar' filetype = 'PDF' )
+    ).
+    " table type of mdao->logs will sort the entries
+
+    f_cut->print_documents( prol_logs = mdao->logs report_parameters = parameters ).
+
+    DATA(found) = abap_false.
+    LOOP AT f_cut->processlog TRANSPORTING NO FIELDS WHERE temp_filepath <> '<deleted>' .
+      found = abap_true.
+    ENDLOOP.
+
+    cl_abap_unit_assert=>assert_equals( exp = abap_false
+      act = found msg = 'Temp files deleted' ).
+
+    cl_abap_unit_assert=>assert_equals( exp = 3
+      act = lines( spy->finalfiles ) msg = 'Right number of output files' ).
+
+    cl_abap_unit_assert=>assert_equals( exp = 'C:\zzztest\filename_112233-456X_1.PDF'
+      act = spy->finalfiles[ no = 1 ]-fpath msg = 'Correct filename construction' ).
+
+    cl_abap_unit_assert=>assert_equals( exp = 'C:\zzztest\filename_112233-456Z_1.PDF'
+      act = spy->finalfiles[ no = 3 ]-fpath msg = 'Correct filename construction, right sorting and merging' ).
+
+  ENDMETHOD.
+  METHOD print_merge_testmode.
+* Several log entries to same ssecid, option merge --> same number of files as ssecid, but nothing written to file
+    DATA(parameters) = VALUE zmartti_prol_print=>selection_parameters_t( filenamepattern = 'filename' directory = 'C:\zzztest' one = abap_true test = abap_true ).
+    DATA: mdao       TYPE REF TO mock_dao.
+    mdao ?= prol_dao.
+    mdao->logs = VALUE #(
+      ( refno = 1 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456Z'
+      archive_id = 'TT' arc_doc_id = '005056BE4D871ED5A6B2F225FF7F6207' filename = 'XMLLASK_010274-140V_J_610989_240208_30-05-2014.PDF' filetype = '' )
+      ( refno = 2 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456Z'
+      archive_id = 'TT' arc_doc_id = 'foo' filename = 'file2.PDF' filetype = '' )
+      ( refno = 3 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456X'
+      archive_id = 'TT' arc_doc_id = 'foo' filename = 'bar' filetype = 'PDF' )
+      ( refno = 4 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456Y'
+      archive_id = 'TT' arc_doc_id = 'foo' filename = 'bar' filetype = 'PDF' )
+      ( refno = 5 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456Y'
+      archive_id = 'TT' arc_doc_id = 'foo' filename = 'bar' filetype = 'PDF' )
+    ).
+
+    f_cut->print_documents( prol_logs = mdao->logs report_parameters = parameters ).
+
+    cl_abap_unit_assert=>assert_equals( exp = 0
+      act = lines( spy->tmpfiles ) msg = 'Right number of temp files' ).
+
+    cl_abap_unit_assert=>assert_equals( exp = 0
+      act = lines( spy->finalfiles ) msg = 'Right number of output files' ).
+
+    cl_abap_unit_assert=>assert_equals( exp = 5
+      act = lines( f_cut->processlog ) msg = 'Right number of testmode data' ).
+
+    DATA count TYPE i.
+    LOOP AT f_cut->processlog TRANSPORTING NO FIELDS WHERE output_filepath = 'C:\zzztest\filename_112233-456Y_1.PDF' .
+      count = count + 1.
+    ENDLOOP.
+    cl_abap_unit_assert=>assert_equals( exp = 2
+      act = count msg = 'Right filepaths in testmode data' ).
+
+  ENDMETHOD.
+  METHOD get_companies.
+    DATA(comp) = f_cut->get_companies( ).
+    cl_abap_unit_assert=>assert_equals( exp = 1
+      act = lines( comp ) ).
+  ENDMETHOD.
+  METHOD handle_merge_error.
+    DATA(parameters) = VALUE zmartti_prol_print=>selection_parameters_t( filenamepattern = 'filename' directory = 'C:\zzztest' one = abap_true test = abap_false ).
+    DATA: mdao       TYPE REF TO mock_dao.
+    mdao ?= prol_dao.
+    mdao->logs = VALUE #(
+      ( refno = 1 bukrs = '1000' document_type = '12' ssecurity_id = 'merge_error'
+      archive_id = 'TT' arc_doc_id = '005056BE4D871ED5A6B2F225FF7F6207' filename = 'XMLLASK_010274-140V_J_610989_240208_30-05-2014.PDF' filetype = '' )
+      ( refno = 2 bukrs = '1000' document_type = '12' ssecurity_id = '112233-456Z'
+      archive_id = 'TT' arc_doc_id = 'foo' filename = 'file2.PDF' filetype = '' ) ).
+
+    f_cut->print_documents( prol_logs = mdao->logs report_parameters = parameters ).
+    DATA(found) = abap_false.
+    LOOP AT f_cut->messages REFERENCE INTO DATA(msg).
+      IF msg->message CS 'SXPG_COMMAND_EXECUTE'.
+        found = abap_true.
+      ENDIF.
+    ENDLOOP.
+    cl_abap_unit_assert=>assert_equals(
+      exp = abap_true
+      act = found
+      msg = 'Failed to issue message about external command error'
+    ).
+  ENDMETHOD.
+  METHOD handle_archive_error.
+    DATA(parameters) = VALUE zmartti_prol_print=>selection_parameters_t( filenamepattern = 'filename' directory = 'C:\zzztest' one = abap_true test = abap_false ).
+    DATA: mdao       TYPE REF TO mock_dao.
+    mdao ?= prol_dao.
+    mdao->logs = VALUE #(
+      ( refno = 1 bukrs = '1000' document_type = '12' ssecurity_id = '112233--456Z'
+      archive_id = 'TT' arc_doc_id = 'error' filename = 'XMLLASK_010274-140V_J_610989_240208_30-05-2014.PDF' filetype = '' )
+      ).
+    f_cut->print_documents( prol_logs = mdao->logs report_parameters = parameters ).
+    DATA(found) = abap_false.
+    LOOP AT f_cut->messages REFERENCE INTO DATA(msg).
+      IF msg->message CS 'Error in archive linking'.
+        found = abap_true.
+      ENDIF.
+    ENDLOOP.
+    cl_abap_unit_assert=>assert_equals(
+      exp = abap_true
+      act = found
+      msg = 'Failed to issue message about archive error'
+    ).
+    found = abap_false.
+    IF line_exists( f_cut->processlog[ archive_success = 'No' ] ).
+      found = abap_true.
+    ENDIF.
+    cl_abap_unit_assert=>assert_equals(
+      exp = abap_true
+      act = found
+      msg = 'Failed to log archive error'
+     ).
+  ENDMETHOD.
+ENDCLASS.

@@ -1,0 +1,63 @@
+*&---------------------------------------------------------------------*
+*& Report ZMARTTI_PROL_PRINT
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zmartti_prol_print.
+
+INCLUDE zmartti_prol_print_aux.
+
+DATA:
+  ssecid  TYPE /xxx/log_prol-ssecurity_id,
+  refno   TYPE /xxx/iv_refno,
+  pmtdate TYPE /xxx/log_prol-date2.
+
+PARAMETERS p_bukrs LIKE /xxx/log_prol-bukrs.
+*SELECT-OPTIONS s_bukrs FOR /xxx/log_prol-bukrs.
+SELECT-OPTIONS s_hetu FOR ssecid NO INTERVALS.
+SELECT-OPTIONS s_refno FOR refno NO-DISPLAY.
+SELECT-OPTIONS s_date FOR pmtdate.
+*PARAMETERS p_id TYPE /xxx/iv_refno DEFAULT '123' NO-DISPLAY.
+PARAMETERS p_test AS CHECKBOX DEFAULT abap_true.
+PARAMETERS r_many TYPE char01 RADIOBUTTON GROUP rb1.
+PARAMETERS r_one TYPE char01 RADIOBUTTON GROUP rb1.
+PARAMETERS p_direc TYPE filep DEFAULT 'c:\temp\'.
+PARAMETERS p_templ TYPE filep DEFAULT 'palkkalaskelma'.
+
+INITIALIZATION.
+  DATA(prol_dao) = NEW zmartti_prol_dao( ).
+  DATA(prol_printer) = NEW zmartti_prol_print( prol_dao = prol_dao ).
+  DATA(aux) = NEW aux( prol_printer ).
+
+AT SELECTION-SCREEN OUTPUT.
+  p_bukrs = aux->get_bukrs( ).
+  LOOP AT SCREEN.
+    IF screen-name = 'P_BUKRS'.
+      screen-input = '0'.
+      MODIFY SCREEN.
+      EXIT.
+    ENDIF.
+  ENDLOOP.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_bukrs.
+  p_bukrs = aux->bukrs_f4( ).
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_direc.
+  p_direc = zmartti_prol_dao=>zif_martti_prol_dao~get_frontend_dirname( ).
+
+START-OF-SELECTION.
+  IF aux->is_authorized_in_comp( p_bukrs ) = abap_false.
+    MESSAGE i090(/xxx/liv) WITH sy-uname aux=>print_role_paramname p_bukrs DISPLAY LIKE 'E'.
+    RETURN.
+  ENDIF.
+  DATA(parameters) = VALUE zmartti_prol_print=>selection_parameters_t(
+    bukrs = p_bukrs socsecids = s_hetu[] pmtdates = s_date[] test = p_test one = r_one many = r_many directory = p_direc filenamepattern = p_templ ).
+
+  DATA(doctypes) = VALUE zmartti_prol_print=>doctype_range( ( sign = 'I' option = 'EQ' low = '12' ) ).
+  DATA(prol_logs) = prol_dao->zif_martti_prol_dao~get_logs(
+    company_code = p_bukrs
+    socsecids = s_hetu[]
+    pmt_dates = s_date[]
+    doctypes = doctypes ).
+  prol_printer->print_documents( prol_logs = prol_logs report_parameters = parameters ).
+  aux->display_results_alv( prol_printer ).

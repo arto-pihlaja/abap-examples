@@ -1,0 +1,366 @@
+class ZMARTTI_PROL_DAO definition
+  public
+  final
+  create public .
+
+public section.
+
+  interfaces ZIF_MARTTI_PROL_DAO .
+protected section.
+private section.
+ENDCLASS.
+
+
+
+CLASS ZMARTTI_PROL_DAO IMPLEMENTATION.
+
+
+  METHOD zif_martti_prol_dao~check_directory.
+    DATA: dir_string TYPE string.
+    DATA:
+      lv_meth TYPE string VALUE 'DIRECTORY_CREATE',         "#EC NOTEXT
+      lv_rc   TYPE i.
+    IF dirpath IS INITIAL.
+      RETURN. "throw exception
+    ENDIF.
+    dir_string = dirpath.
+    TRY.
+        IF cl_gui_frontend_services=>directory_exist( dir_string ) = abap_false.
+          cl_gui_frontend_services=>directory_create( EXPORTING directory = dir_string CHANGING rc = lv_rc
+            EXCEPTIONS directory_create_failed = 1 directory_access_denied = 4 directory_already_exists = 5 path_not_found = 6 ).
+          IF lv_rc <> 0.
+            RAISE EXCEPTION TYPE zcx_file_access.
+          ENDIF.
+        ENDIF.
+    ENDTRY.
+  ENDMETHOD.
+
+
+  METHOD zif_martti_prol_dao~delete_from_app_server.
+
+    OPEN DATASET filepath FOR OUTPUT IN BINARY MODE.
+    DELETE DATASET filepath.
+    DATA(subrc) = sy-subrc.
+    CLOSE DATASET filepath.
+    IF subrc <> 0.
+      RAISE EXCEPTION TYPE zcx_file_access.
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD zif_martti_prol_dao~execute_external_command.
+    DATA: status   TYPE extcmdexex-status,
+          exitcode TYPE extcmdexex-exitcode.
+    CALL FUNCTION 'SXPG_COMMAND_EXECUTE'
+      EXPORTING
+        commandname                   = parameters-name
+        additional_parameters         = parameters-parameters
+      IMPORTING
+        status                        = status
+        exitcode                      = exitcode
+      EXCEPTIONS
+        no_permission                 = 1
+        command_not_found             = 2
+        parameters_too_long           = 3
+        security_risk                 = 4
+        wrong_check_call_interface    = 5
+        program_start_error           = 6
+        program_termination_error     = 7
+        x_error                       = 8
+        parameter_expected            = 9
+        too_many_parameters           = 10
+        illegal_command               = 11
+        wrong_asynchronous_parameters = 12
+        cant_enq_tbtco_entry          = 13
+        jobcount_generation_error     = 14
+        OTHERS                        = 15.
+
+    IF sy-subrc > 0.
+      RAISE EXCEPTION TYPE zcx_external_command EXPORTING exitcode = exitcode.
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD zif_martti_prol_dao~get_archive_object.
+    DATA: datatab TYPE crd_t_1024,
+          binlen  TYPE sapb-length.
+    CALL FUNCTION 'ARCHIVOBJECT_GET_TABLE'
+      EXPORTING
+        archiv_id                = arcid
+        document_type            = 'PDF'
+        archiv_doc_id            = arcdocid
+*       ALL_COMPONENTS           =
+*       SIGNATURE                = 'X'
+*       COMPID                   = 'data'
+      IMPORTING
+*       LENGTH                   =
+        binlength                = binlen
+      TABLES
+*       archivobject             = lt_arc_obj
+        binarchivobject          = datatab
+      EXCEPTIONS
+        error_archiv             = 1
+        error_communicationtable = 2
+        error_kernel             = 3
+        OTHERS                   = 4.
+    IF sy-subrc <> 0.
+      RAISE EXCEPTION TYPE zcx_archive_access.
+    ENDIF.
+    DATA len TYPE i.
+    len = CONV i( binlen ).
+    CALL FUNCTION 'SCMS_BINARY_TO_XSTRING'
+      EXPORTING
+        input_length = len
+*       FIRST_LINE   = 0
+*       LAST_LINE    = 0
+      IMPORTING
+        buffer       = dataxstring
+      TABLES
+        binary_tab   = datatab
+      EXCEPTIONS
+        failed       = 1
+        OTHERS       = 2.
+    IF sy-subrc <> 0.
+      RAISE EXCEPTION TYPE zcx_archive_access.
+    ENDIF.
+
+
+  ENDMETHOD.
+
+
+  METHOD ZIF_MARTTI_PROL_DAO~GET_FRONTEND_DIRNAME.
+
+    DATA: sel_folder TYPE string,
+          title      TYPE string.
+    title = TEXT-000.
+
+    cl_gui_frontend_services=>directory_browse(
+      EXPORTING window_title = title
+        CHANGING selected_folder = sel_folder
+        EXCEPTIONS
+          cntl_error = 1
+          error_no_gui = 2
+          not_supported_by_gui = 3 ).
+    IF sy-subrc <> 0.
+      RETURN.
+    ENDIF.
+    directory = sel_folder.
+
+  ENDMETHOD.
+
+
+  METHOD zif_martti_prol_dao~get_logs.
+    CHECK socsecids IS NOT INITIAL.
+    SELECT refno, bukrs, source_system, ssecurity_id, person_name, person_name_caps, archive_id, arc_doc_id
+      FROM /xxx/log_prol
+      INTO CORRESPONDING FIELDS OF TABLE @logs
+      WHERE bukrs = @company_code
+        AND ssecurity_id IN @socsecids
+        AND document_type IN @doctypes
+        AND date2 IN @pmt_dates.
+*      ORDER BY ssecurity_id.
+  ENDMETHOD.
+
+
+  METHOD zif_martti_prol_dao~get_parameter.
+    CALL FUNCTION '/xxx/IV_READ_HCVAL'
+      EXPORTING
+        im_name    = name
+        im_process = process
+      IMPORTING
+        ex_value   = value
+      EXCEPTIONS
+        not_found  = 1
+        OTHERS     = 2.
+    IF value IS INITIAL.
+      RAISE EXCEPTION TYPE zcx_missing_parameter EXPORTING parameter = name.
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD zif_martti_prol_dao~get_user_roles.
+    DATA: ret    TYPE bapiret2tab,
+          rol_st TYPE STANDARD TABLE OF bapiagr.
+    CALL FUNCTION 'BAPI_USER_GET_DETAIL'
+      EXPORTING
+        username       = user
+      TABLES
+        activitygroups = rol_st
+        return         = ret.
+*      TODO - check ret
+    SORT rol_st BY agr_name ASCENDING.
+    DELETE ADJACENT DUPLICATES FROM rol_st.
+    LOOP AT rol_st INTO DATA(role) WHERE from_dat <= sy-datum AND to_dat >= sy-datum.
+      INSERT role INTO TABLE roles.
+    ENDLOOP.
+  ENDMETHOD.
+
+
+  METHOD zif_martti_prol_dao~list_files_in_directory.
+    DATA(dirnam) = CONV epsdirnam( directory ).
+    DATA(fmask) = CONV epsfilnam( filename_mask ).
+    DATA flist TYPE STANDARD TABLE OF epsfili.
+    CALL FUNCTION 'EPS_GET_DIRECTORY_LISTING'
+      EXPORTING
+        dir_name               = dirnam
+        file_mask              = fmask
+*     IMPORTING
+*       DIR_NAME               =
+*       FILE_COUNTER           =
+*       ERROR_COUNTER          =
+      TABLES
+        dir_list               = flist
+      EXCEPTIONS
+        invalid_eps_subdir     = 1
+        sapgparam_failed       = 2
+        build_directory_failed = 3
+        no_authorization       = 4
+        read_directory_failed  = 5
+        too_many_read_errors   = 6
+        empty_directory_list   = 7
+        OTHERS                 = 8.
+    IF sy-subrc <> 0.
+      RAISE EXCEPTION TYPE zcx_file_access.
+    ENDIF.
+
+    LOOP AT flist REFERENCE INTO DATA(fl).
+      APPEND INITIAL LINE TO filenames REFERENCE INTO DATA(fn).
+      fn->* = fl->name.
+    ENDLOOP.
+
+  ENDMETHOD.
+
+
+  method ZIF_MARTTI_PROL_DAO~NUMBER_GET_NEXT.
+
+    CALL FUNCTION 'NUMBER_GET_NEXT'
+      EXPORTING
+        nr_range_nr             = '01'
+        object                  = 'ZPDFMERGE'
+*       QUANTITY                = '1'
+*       SUBOBJECT               = ' '
+*       TOYEAR                  = '0000'
+*       IGNORE_BUFFER           = ' '
+      IMPORTING
+        number                  = number
+*       QUANTITY                =
+*       RETURNCODE              =
+      EXCEPTIONS
+        interval_not_found      = 1
+        number_range_not_intern = 2
+        object_not_found        = 3
+        quantity_is_0           = 4
+        quantity_is_not_1       = 5
+        interval_overflow       = 6
+        buffer_overflow         = 7
+        OTHERS                  = 8.
+    IF sy-subrc <> 0.
+*      raise exception type zcx_number
+    ENDIF.
+
+  endmethod.
+
+
+  METHOD zif_martti_prol_dao~read_from_app_server.
+
+    CHECK filepath IS NOT INITIAL.
+    TRY.
+        OPEN DATASET filepath FOR INPUT IN BINARY MODE.
+        READ DATASET filepath INTO dataxstring.
+        CLOSE DATASET filepath.
+      CATCH cx_sy_file_open_mode.
+        RAISE EXCEPTION TYPE zcx_file_access.
+    ENDTRY.
+  ENDMETHOD.
+
+
+  METHOD zif_martti_prol_dao~save_to_app_server.
+    IF dataxstring IS INITIAL.
+      RETURN.
+    ENDIF.
+    OPEN DATASET filepath FOR OUTPUT IN BINARY MODE.
+    IF sy-subrc = 0.
+      TRANSFER dataxstring TO filepath.
+      CLOSE DATASET filepath.
+    ELSE.
+      RAISE EXCEPTION TYPE zcx_file_access.
+    ENDIF.
+  ENDMETHOD.
+
+
+  METHOD zif_martti_prol_dao~save_to_local.
+    DATA datatab TYPE TABLE OF x255.
+    DATA length LIKE sy-tabix.
+    data: filepathstr type string.
+
+    CHECK dataxstring IS NOT INITIAL.
+    filepathstr = filepath.
+    CALL FUNCTION 'SCMS_XSTRING_TO_BINARY'
+      EXPORTING
+        buffer        = dataxstring
+      IMPORTING
+        output_length = length
+      TABLES
+        binary_tab    = datatab.
+
+    CALL FUNCTION 'GUI_DOWNLOAD'
+      EXPORTING
+       BIN_FILESIZE            = length
+        filename                = filepathstr
+        filetype                = 'BIN'
+*       APPEND                  = ' '
+*       WRITE_FIELD_SEPARATOR   = ' '
+*       HEADER                  = '00'
+*       TRUNC_TRAILING_BLANKS   = ' '
+*       WRITE_LF                = 'X'
+*       COL_SELECT              = ' '
+*       COL_SELECT_MASK         = ' '
+*       DAT_MODE                = ' '
+*       CONFIRM_OVERWRITE       = ' '
+*       NO_AUTH_CHECK           = ' '
+*       CODEPAGE                = ' '
+*       IGNORE_CERR             = ABAP_TRUE
+*       REPLACEMENT             = '#'
+*       WRITE_BOM               = ' '
+*       TRUNC_TRAILING_BLANKS_EOL       = 'X'
+*       WK1_N_FORMAT            = ' '
+*       WK1_N_SIZE              = ' '
+*       WK1_T_FORMAT            = ' '
+*       WK1_T_SIZE              = ' '
+*       WRITE_LF_AFTER_LAST_LINE        = ABAP_TRUE
+*       SHOW_TRANSFER_STATUS    = ABAP_TRUE
+*       VIRUS_SCAN_PROFILE      = '/SCET/GUI_DOWNLOAD'
+* IMPORTING
+*       FILELENGTH              =
+      TABLES
+        data_tab                = datatab
+*       FIELDNAMES              =
+      EXCEPTIONS
+        file_write_error        = 1
+        no_batch                = 2
+        gui_refuse_filetransfer = 3
+        invalid_type            = 4
+        no_authority            = 5
+        unknown_error           = 6
+        header_not_allowed      = 7
+        separator_not_allowed   = 8
+        filesize_not_allowed    = 9
+        header_too_long         = 10
+        dp_error_create         = 11
+        dp_error_send           = 12
+        dp_error_write          = 13
+        unknown_dp_error        = 14
+        access_denied           = 15
+        dp_out_of_memory        = 16
+        disk_full               = 17
+        dp_timeout              = 18
+        file_not_found          = 19
+        dataprovider_exception  = 20
+        control_flush_error     = 21
+        OTHERS                  = 22.
+    IF sy-subrc <> 0.
+      RAISE EXCEPTION TYPE zcx_file_access.
+    ENDIF.
+
+  ENDMETHOD.
+ENDCLASS.

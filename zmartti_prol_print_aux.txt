@@ -1,0 +1,154 @@
+*&---------------------------------------------------------------------*
+*&  Include           ZMARTTI_PROL_PRINT_AUX
+*&---------------------------------------------------------------------*
+
+CLASS aux DEFINITION.
+  PUBLIC SECTION.
+    CONSTANTS: print_role_paramname TYPE /xxx/paramvalue VALUE 'ROLE_PROL_PRINT'.
+    METHODS:
+      constructor IMPORTING prol_print TYPE REF TO zmartti_prol_print,
+      get_bukrs RETURNING VALUE(bukrs) TYPE bukrs,
+      bukrs_f4 RETURNING VALUE(bukrs) TYPE bukrs,
+      get_comp_list RETURNING VALUE(bukrstab) TYPE t_bukrs,
+      is_authorized_in_comp IMPORTING comp TYPE bukrs RETURNING VALUE(ok) TYPE abap_bool,
+      display_results_alv IMPORTING prol_print TYPE REF TO zmartti_prol_print.
+    CLASS-DATA: comp_list TYPE t_bukrs.
+    DATA: prol_print TYPE REF TO zmartti_prol_print.
+ENDCLASS.
+CLASS aux IMPLEMENTATION.
+  METHOD constructor.
+    me->prol_print = prol_print.
+  ENDMETHOD.
+  METHOD get_bukrs.
+    DATA(bukrstab) = get_comp_list( ).
+    READ TABLE bukrstab INTO bukrs INDEX 1.
+  ENDMETHOD.
+  METHOD bukrs_f4.
+    DATA: bukrs_lst TYPE STANDARD TABLE OF /xxx/bukrs_ltxt WITH KEY bukrs.
+    DATA: ret_tab TYPE STANDARD TABLE OF ddshretval.
+    DATA(comp_codes) = get_comp_list( ).
+    IF comp_codes IS INITIAL.
+      READ TABLE prol_print->messages WITH KEY id = '/xxx/LIV' number = 114 REFERENCE INTO DATA(msg).
+      IF msg IS NOT INITIAL.
+        MESSAGE ID msg->id TYPE 'I' NUMBER msg->number WITH msg->message_v1 msg->message_v2.
+      ENDIF.
+      MESSAGE i113(/xxx/liv).
+      RETURN.
+    ENDIF.
+    SELECT bukrs, butxt FROM t001
+      INTO TABLE @bukrs_lst
+      FOR ALL ENTRIES IN @comp_codes
+      WHERE bukrs = @comp_codes-table_line.
+    CALL FUNCTION 'F4IF_INT_TABLE_VALUE_REQUEST'
+      EXPORTING
+*       DDIC_STRUCTURE         = ' '
+        retfield   = 'BUKRS'
+*       PVALKEY    = ' '
+*       DYNPPROG   = ' '
+*       DYNPNR     = ' '
+*       DYNPROFIELD            = ' '
+*       STEPL      = 0
+*       WINDOW_TITLE           =
+*       VALUE      = ' '
+        value_org  = 'S'
+*       MULTIPLE_CHOICE        = ' '
+*       DISPLAY    = ' '
+*       CALLBACK_PROGRAM       = ' '
+*       CALLBACK_FORM          = ' '
+*       CALLBACK_METHOD        =
+*       MARK_TAB   =
+*     IMPORTING
+*       USER_RESET =
+      TABLES
+        value_tab  = bukrs_lst
+*       FIELD_TAB  =
+        return_tab = ret_tab
+*       DYNPFLD_MAPPING        =
+*     EXCEPTIONS
+*       PARAMETER_ERROR        = 1
+*       NO_VALUES_FOUND        = 2
+*       OTHERS     = 3
+      .
+    IF sy-subrc <> 0.
+* Implement suitable error handling here
+    ENDIF.
+    READ TABLE ret_tab INDEX 1 REFERENCE INTO DATA(ret).
+    IF sy-subrc <> 0.
+      RETURN.
+    ENDIF.
+    bukrs = ret->fieldval.
+  ENDMETHOD.
+  METHOD get_comp_list.
+    IF comp_list IS INITIAL.
+      comp_list = prol_print->get_companies( ).
+    ENDIF.
+    bukrstab = comp_list.
+  ENDMETHOD.
+  METHOD is_authorized_in_comp.
+    DATA(authorized_companies) = get_comp_list( ).
+    IF line_exists( authorized_companies[ table_line = comp ] ).
+      ok = abap_true.
+    ELSE.
+      ok = abap_false.
+    ENDIF.
+  ENDMETHOD.
+  METHOD display_results_alv.
+    DATA: processlog TYPE zmartti_prol_print=>process_log_tt,
+          scrtxt_m   TYPE scrtext_m,
+          scrtxt_s   TYPE scrtext_s.
+    processlog = prol_print->processlog.
+    TRY.
+        cl_salv_table=>factory(
+          IMPORTING r_salv_table = DATA(salv)
+          CHANGING t_table = processlog
+        ).
+        DATA(functions) = salv->get_functions( ).
+        functions->set_all( abap_true ).
+        DATA(dispset) = salv->get_display_settings( ).
+        dispset->set_list_header( TEXT-001 ).
+        DATA(cols) = salv->get_columns( ).
+        cols->set_optimize( abap_true ).
+        DATA(col) = cols->get_column( 'TEMP_FILEPATH' ).
+        col->set_visible( abap_false ).
+        col = cols->get_column( 'ARC_FILENAME' ).
+        col->set_long_text( TEXT-002 ).
+        col = cols->get_column( 'ARCHIVE_SUCCESS' ).
+        col->set_short_text( TEXT-003 ).
+        col = cols->get_column( 'OUTPUT_FILEPATH' ).
+        col->set_medium_text( TEXT-004 ).
+        scrtxt_s = TEXT-004.
+        col->set_short_text( scrtxt_s ).
+      CATCH cx_salv_msg cx_salv_not_found.
+        MESSAGE i000(/xxx/liv) WITH TEXT-005
+                DISPLAY LIKE 'E'.
+    ENDTRY.
+    TYPES: BEGIN OF msgrow_t,
+             message TYPE bapiret2-message,
+           END OF msgrow_t.
+    DATA: msgs TYPE STANDARD TABLE OF msgrow_t.
+
+    IF lines( prol_print->messages ) > 0.
+      LOOP AT prol_print->messages REFERENCE INTO DATA(msg).
+        APPEND INITIAL LINE TO msgs REFERENCE INTO DATA(msg2).
+        msg2->message = msg->message.
+      ENDLOOP.
+      TRY.
+          cl_salv_table=>factory(
+            IMPORTING r_salv_table = DATA(palv)
+            CHANGING  t_table = msgs ).
+          palv->set_screen_popup( start_column = 1
+                                 end_column   = 60
+                                 start_line   = 1
+                                 end_line     = 12 ).
+          palv->display( ).
+        CATCH cx_salv_msg.
+          MESSAGE 'ALV display not possible' TYPE 'I'
+                  DISPLAY LIKE 'E'.
+      ENDTRY.
+    ENDIF.
+    salv->display( ).
+
+
+  ENDMETHOD.
+
+ENDCLASS.
