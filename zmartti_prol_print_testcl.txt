@@ -228,7 +228,7 @@ CLASS print_test IMPLEMENTATION.
     f_cut->print_documents( prol_logs = mdao->logs report_parameters = parameters ).
 
     DATA(found) = abap_false.
-    LOOP AT f_cut->processlog TRANSPORTING NO FIELDS WHERE temp_filepath <> '<deleted>' .
+    LOOP AT f_cut->processlog TRANSPORTING NO FIELDS WHERE temp_filename <> '<deleted>' .
       found = abap_true.
     ENDLOOP.
 
