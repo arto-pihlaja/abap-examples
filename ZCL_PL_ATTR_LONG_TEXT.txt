@@ -1,0 +1,183 @@
+﻿class ZCL_PL_ATTR_LONG_TEXT definition
+  public
+  final
+  create public .
+
+public section.
+
+  interfaces ZIF_PL_ATTRIBUTE .
+
+  constants GC_MATERIAL type TDOBJECT value 'MATERIAL'. "#EC NOTEXT
+  constants GC_GRUN type TDID value 'GRUN'. "#EC NOTEXT
+  constants GC_RELID_TX type SYCHAR02 value 'TX'. "#EC NOTEXT
+  constants GC_PACKAGE_SIZE type I value 3000. "#EC NOTEXT
+  constants GC_TEXT_LENGTH type I value 2000. "#EC NOTEXT
+
+
+  types:
+    LONGTEXT_T type c LENGTH gc_text_length. "2000 .
+  types:
+    BEGIN OF STXL_T,
+*          relid     TYPE stxl-relid,
+*          tdobject  TYPE stxl-tdobject,
+          tdname    TYPE stxl-tdname,
+*          tdid      TYPE stxl-tdid,
+*          tdspras   TYPE stxl-tdspras,
+*          srtf2     TYPE stxl-srtf2,
+          clustr    TYPE stxl-clustr,
+          clustd    TYPE stxl-clustd,
+        END OF STXL_t .
+  types:
+*    stxl_tt type HASHED TABLE OF stxl_t WITH UNIQUE key tdname .
+    stxl_tt type STANDARD TABLE OF stxl_t WITH DEFAULT KEY.
+endclass.
+
+class implementation.
+METHOD zif_pl_attribute~calculate.
+* Purpose: get long text for materials, avoiding the overhead of repeatedly calling FM READ_TEXT
+* Assumptions:
+*  Select texts for all materials in one go.
+*  Only one language selected.
+*  Moderate text length --> only one STXL entry per material.
+
+
+  DATA: lrg_tdname TYPE RANGE OF tdobname,
+        lrg_tdname_part TYPE RANGE OF tdobname,
+        ls_tdname LIKE LINE OF lrg_tdname,
+        lt_stxl TYPE stxl_tt,
+        ls_stxl TYPE stxl_t,
+*        lrg_langu TYPE RANGE OF langu,
+*        ls_langu LIKE LINE OF lrg_langu,
+        lv_longtext TYPE longtext_t,
+        lv_langu TYPE langu,
+        lv_maxlen TYPE i
+        .
+
+  DATA l_first_tabix  TYPE sy-tabix.
+  DATA l_last_tabix   TYPE sy-tabix.
+  DATA subrc          TYPE sy-subrc.
+  DATA process        TYPE abap_bool.
+* compressed text data without text name
+  TYPES: BEGIN OF ty_stxl_raw,
+            clustr TYPE stxl-clustr,
+            clustd TYPE stxl-clustd,
+          END OF ty_stxl_raw.
+  DATA:  t_stxl_raw TYPE STANDARD TABLE OF ty_stxl_raw.
+  DATA:  w_stxl_raw TYPE ty_stxl_raw.
+* decompressed text
+  DATA:  t_tline TYPE STANDARD TABLE OF tline.
+  FIELD-SYMBOLS: <tline> TYPE tline.
+  DATA: chunk type i,
+        lin type i,
+        d type i,
+        m type i,
+        itr type i,
+        start_line type i,
+        end_line TYPE i,
+        param TYPE zsd_pl_param_value.
+  FIELD-SYMBOLS: <data> TYPE zsd_pl_data_line,
+                 <stxl> TYPE stxl_t.
+
+  IF i_variable CO '0123456789 '.
+    lv_maxlen = i_variable.
+*{   REPLACE        ED2K915714                                        1
+*\  ELSE.
+*\    lv_maxlen = gc_text_length.
+*\  ENDIF.
+  endif.
+  if lv_maxlen is initial.
+    lv_maxlen = gc_text_length.
+  ENDIF.
+*}   REPLACE
+
+  IF i_lang IS NOT INITIAL.
+    lv_langu = i_lang.
+  ELSE.
+    lv_langu = sy-langu.
+  ENDIF.
+
+  ls_tdname-sign = 'I'. ls_tdname-option = 'EQ'.
+  LOOP AT ct_data ASSIGNING <data>.
+    ls_tdname-low = <data>-linekey.
+    APPEND ls_tdname TO lrg_tdname.
+  ENDLOOP.
+  IF lrg_tdname IS INITIAL.
+    RETURN.
+  ENDIF.
+
+* Process the range table in chunks. The SELECT terminates if the WHERE clause gets too long!
+  param = zcl_pl_sel_util=>get_param( 'LTXT_RANGE_ROWS' ).
+*  if param co '0123456789 '.
+* Deliberately cause program termination if the parameter contains invalid values!
+  chunk = param.
+*    else.
+*      return.
+*  endif.
+  DESCRIBE TABLE lrg_tdname LINES lin.
+  d = lin DIV chunk.
+  m = lin MOD chunk.
+
+  WHILE itr < d.
+    itr = itr + 1.
+    end_line = start_line + chunk.
+    start_line = start_line + 1.
+    APPEND LINES OF lrg_tdname FROM start_line TO end_line TO lrg_tdname_part.
+    SELECT tdname clustr clustd
+      FROM stxl
+      APPENDING TABLE lt_stxl
+      WHERE relid     = gc_relid_tx
+        AND tdobject  = gc_material
+        AND tdname IN   lrg_tdname_part
+        AND tdid      = gc_grun
+*      AND tdspras IN  lrg_langu
+        AND tdspras = lv_langu
+        .
+    CLEAR lrg_tdname_part.
+    start_line = end_line.
+  ENDWHILE.
+  IF m > 0.
+    end_line = start_line + m.
+    start_line = start_line + 1.
+    APPEND LINES OF lrg_tdname FROM start_line TO end_line TO lrg_tdname_part.
+    SELECT tdname clustr clustd
+      FROM stxl
+      APPENDING TABLE lt_stxl
+      WHERE relid     = gc_relid_tx
+        AND tdobject  = gc_material
+        AND tdname IN   lrg_tdname_part
+        AND tdid      = gc_grun
+*      AND tdspras IN  lrg_langu
+        AND tdspras = lv_langu
+        .
+  ENDIF.
+  SORT lt_stxl BY tdname.
+
+* There may be significantly less rows in lt_stxl than in ct_data, so we might be better off looping through
+* lt_stxl and using a binary search on ct_data. However, we don't know here that ct_data is sorted correctly,
+* nor can we be sure of the impact if we sort here.
+
+  LOOP AT ct_data ASSIGNING <data>.
+    READ TABLE lt_stxl ASSIGNING <stxl> WITH KEY tdname = <data>-linekey BINARY SEARCH.
+    IF sy-subrc = 0.
+      w_stxl_raw-clustr = <stxl>-clustr.
+      w_stxl_raw-clustd = <stxl>-clustd.
+      APPEND w_stxl_raw TO t_stxl_raw.
+* Convert the raw data cluster to tline table.
+      IMPORT tline = t_tline FROM INTERNAL TABLE t_stxl_raw.
+
+      LOOP AT t_tline ASSIGNING <tline>.
+        CONCATENATE lv_longtext <tline>-tdline INTO lv_longtext.
+        IF strlen( lv_longtext ) > lv_maxlen.
+          lv_longtext = lv_longtext(lv_maxlen).
+          EXIT.
+        ENDIF.
+      ENDLOOP.
+      <data>-linevalue = lv_longtext.
+      <data>-linedatatype = 'string'.
+      CLEAR: w_stxl_raw, t_stxl_raw, t_tline, lv_longtext.
+    ENDIF.
+  ENDLOOP.
+
+ENDMETHOD.
+
+endclass.
